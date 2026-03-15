@@ -11,6 +11,7 @@ export default function InboxScreen() {
   const users = useAppStore((state) => state.users);
   const reviews = useAppStore((state) => state.reviews);
   const selectedConversationId = useAppStore((state) => state.selectedConversationId);
+  const pendingThreadTarget = useAppStore((state) => state.pendingThreadTarget);
   const selectConversation = useAppStore((state) => state.selectConversation);
   const sendMessage = useAppStore((state) => state.sendMessage);
   const acceptLatestOffer = useAppStore((state) => state.acceptLatestOffer);
@@ -30,8 +31,17 @@ export default function InboxScreen() {
     return new Map(entries);
   }, [currentAccount, users]);
 
+  const pendingConversation = pendingThreadTarget
+    ? conversations.find(
+        (conversation) =>
+          conversation.taskId === pendingThreadTarget.taskId &&
+          (conversation.threadType ?? "private") === pendingThreadTarget.threadType
+      )
+    : null;
   const selectedConversation =
-    conversations.find((conversation) => conversation.id === selectedConversationId) ?? conversations[0];
+    pendingConversation ??
+    conversations.find((conversation) => conversation.id === selectedConversationId) ??
+    conversations[0];
   const selectedTask = tasks.find((task) => task.id === selectedConversation?.taskId);
   const counterpartIds = (selectedConversation?.participantIds ?? []).filter((id) => id !== currentAccount?.id);
   const counterpartUsers = counterpartIds
@@ -48,6 +58,10 @@ export default function InboxScreen() {
     .reverse()
     .find((message) => typeof message.offerAmount === "number");
   const selectedThreadType = selectedConversation?.threadType ?? "private";
+  const pendingTask = pendingThreadTarget
+    ? tasks.find((task) => task.id === pendingThreadTarget.taskId)
+    : null;
+  const isOpeningPendingThread = Boolean(pendingThreadTarget && !pendingConversation);
 
   const threadRows = useMemo(
     () =>
@@ -147,6 +161,12 @@ export default function InboxScreen() {
             </Text>
           </Pressable>
         </View>
+      ) : isOpeningPendingThread || status === "loading" ? (
+        <View className="mt-5 rounded-[20px] border border-[#dfe8d8] bg-[#f3f8f1] px-4 py-4">
+          <Text className="text-sm font-semibold text-[#355341]">
+            Opening {pendingThreadTarget?.threadType === "public" ? "public thread" : "private chat"}...
+          </Text>
+        </View>
       ) : null}
 
       <View className="mt-8 rounded-[28px] border border-[#e8e1d5] bg-white px-4 py-4">
@@ -192,15 +212,19 @@ export default function InboxScreen() {
       <View className="mt-6 rounded-[28px] border border-[#e8e1d5] bg-[#08101c] px-5 py-5">
         <Text className="text-xs font-semibold uppercase tracking-[2px] text-[#9cb4a4]">Selected thread</Text>
         <Text className="mt-3 text-2xl font-bold leading-8 text-white">
-          {selectedTask?.title ?? "Choose a thread to start"}
+          {isOpeningPendingThread ? pendingTask?.title ?? "Opening thread..." : selectedTask?.title ?? "Choose a thread to start"}
         </Text>
         <Text className="mt-2 text-sm leading-6 text-[#c0c9d5]">
-          {selectedThreadType === "public"
+          {isOpeningPendingThread
+            ? pendingThreadTarget?.threadType === "public"
+              ? `Preparing the public thread for ZIP ${pendingTask?.zipCode ?? ""}`
+              : "Preparing the private chat..."
+            : selectedThreadType === "public"
             ? `Public thread for job questions in ZIP ${selectedTask?.zipCode ?? ""}`
             : counterpartLabel}
         </Text>
 
-        {selectedTask ? (
+        {!isOpeningPendingThread && selectedTask ? (
           <View className="mt-5 flex-row flex-wrap gap-2">
             <InlinePill icon="location-outline" text={selectedTask.location} dark />
             <InlinePill icon="navigate-outline" text={selectedTask.zipCode} dark />
@@ -209,7 +233,7 @@ export default function InboxScreen() {
           </View>
         ) : null}
 
-        <View className="mt-5 gap-3">
+        {!isOpeningPendingThread ? <View className="mt-5 gap-3">
           <View className="flex-row gap-3">
             <QuickAction
               label="Ask a question"
@@ -229,13 +253,19 @@ export default function InboxScreen() {
               <QuickAction label="Mark complete" onPress={() => void (selectedTask && completeTask(selectedTask.id))} />
             </View>
           ) : null}
-        </View>
+        </View> : null}
       </View>
 
       <View className="mt-6 rounded-[28px] border border-[#e8e1d5] bg-white px-4 py-4">
         <Text className="text-sm font-semibold uppercase tracking-[2px] text-[#6f7d8d]">Conversation</Text>
         <View className="mt-4">
-          {selectedConversation?.messages.length ? (
+          {isOpeningPendingThread ? (
+            <View className="rounded-[22px] bg-[#faf7f2] px-4 py-6">
+              <Text className="text-sm leading-6 text-[#5b6779]">
+                Loading the selected thread without interrupting the page layout.
+              </Text>
+            </View>
+          ) : selectedConversation?.messages.length ? (
             selectedConversation.messages.map((message) => {
               const isSystem = message.kind === "system";
               const isMine = message.senderId === currentAccount?.id;
@@ -325,14 +355,9 @@ export default function InboxScreen() {
           placeholderTextColor="#8a95a5"
           className="mt-4 rounded-[22px] border border-[#e8e1d5] bg-[#faf7f2] px-4 py-4 text-[#08101c]"
         />
-        <View className="mt-4 flex-row gap-3">
-          <Pressable onPress={() => submitMessage("message")} className="flex-1 rounded-full bg-[#08101c] px-4 py-4">
-            <Text className="text-center text-sm font-bold text-white">Send message</Text>
-          </Pressable>
-          <Pressable onPress={() => submitMessage("question")} className="flex-1 rounded-full bg-[#d8f6df] px-4 py-4">
-            <Text className="text-center text-sm font-bold text-[#08101c]">Send question</Text>
-          </Pressable>
-        </View>
+        <Pressable onPress={() => submitMessage("message")} className="mt-4 rounded-full bg-[#08101c] px-4 py-4">
+          <Text className="text-center text-sm font-bold text-white">Send message</Text>
+        </Pressable>
       </View>
     </Screen>
   );

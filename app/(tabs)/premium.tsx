@@ -1,4 +1,5 @@
-import { Pressable, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import { Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/screen";
 import { useAppStore } from "@/store/use-app-store";
@@ -7,12 +8,56 @@ export default function ProfileScreen() {
   const activeRole = useAppStore((state) => state.activeRole);
   const selectRole = useAppStore((state) => state.selectRole);
   const logout = useAppStore((state) => state.logout);
+  const updateProfile = useAppStore((state) => state.updateProfile);
   const currentAccount = useAppStore((state) => state.currentAccount);
   const tasks = useAppStore((state) => state.tasks);
   const conversations = useAppStore((state) => state.conversations);
+  const status = useAppStore((state) => state.status);
+  const error = useAppStore((state) => state.error);
+  const [isEditing, setIsEditing] = useState(false);
+  const [homeBase, setHomeBase] = useState("");
+  const [zipCode, setZipCode] = useState("");
+  const [travelRadiusMiles, setTravelRadiusMiles] = useState("10");
+  const [bio, setBio] = useState("");
 
   const postedTasks = tasks.filter((task) => task.postedBy === currentAccount?.id);
   const assignedTasks = tasks.filter((task) => task.assignedTo === currentAccount?.id);
+
+  useEffect(() => {
+    if (!currentAccount || isEditing) {
+      return;
+    }
+
+    setHomeBase(currentAccount.homeBase);
+    setZipCode(currentAccount.zipCode);
+    setTravelRadiusMiles(String(currentAccount.travelRadiusMiles));
+    setBio(currentAccount.bio);
+  }, [currentAccount, isEditing]);
+
+  const handleStartEdit = () => {
+    if (!currentAccount) {
+      return;
+    }
+
+    setHomeBase(currentAccount.homeBase);
+    setZipCode(currentAccount.zipCode);
+    setTravelRadiusMiles(String(currentAccount.travelRadiusMiles));
+    setBio(currentAccount.bio);
+    setIsEditing(true);
+  };
+
+  const handleSave = async () => {
+    const saved = await updateProfile({
+      homeBase,
+      zipCode,
+      travelRadiusMiles: Number(travelRadiusMiles),
+      bio
+    });
+
+    if (saved) {
+      setIsEditing(false);
+    }
+  };
 
   return (
     <Screen>
@@ -28,7 +73,14 @@ export default function ProfileScreen() {
           </Pressable>
         </View>
 
-        <Text className="mt-4 text-3xl font-black text-[#08101c]">{currentAccount?.name ?? "Local account"}</Text>
+        <View className="mt-4 flex-row items-center justify-between gap-3">
+          <Text className="flex-1 text-3xl font-black text-[#08101c]">{currentAccount?.name ?? "Your account"}</Text>
+          {!isEditing ? (
+            <Pressable onPress={handleStartEdit} className="rounded-full border border-[#d9d2c7] bg-[#faf7f2] px-4 py-3">
+              <Text className="text-sm font-bold text-[#08101c]">Edit profile</Text>
+            </Pressable>
+          ) : null}
+        </View>
         <Text className="mt-2 text-sm leading-6 text-[#5b6779]">{currentAccount?.bio ?? "Marketplace profile"}</Text>
 
         <View className="mt-4 flex-row flex-wrap gap-3">
@@ -38,9 +90,66 @@ export default function ProfileScreen() {
               currentAccount ? `${currentAccount.homeBase} | ZIP ${currentAccount.zipCode}` : "ZIP not set"
             }
           />
+          <Badge icon="car-outline" text={`${currentAccount?.travelRadiusMiles ?? 0} mile radius`} />
           <Badge icon="navigate-outline" text={`${currentAccount?.serviceZipCodes.length ?? 0} service ZIPs`} />
           <Badge icon="chatbubble-ellipses-outline" text={`${conversations.length} active threads`} />
         </View>
+
+        {isEditing ? (
+          <View className="mt-5 rounded-[26px] border border-[#efe7da] bg-[#faf7f2] px-4 py-4">
+            <Text className="text-lg font-bold text-[#08101c]">Update coverage</Text>
+            <Text className="mt-2 text-sm leading-6 text-[#5b6779]">
+              Change your home base, main ZIP, and travel radius. We will refresh your nearby job coverage automatically.
+            </Text>
+
+            <ProfileField
+              label="Home base"
+              value={homeBase}
+              onChangeText={setHomeBase}
+              placeholder="Santa Monica, CA"
+            />
+            <ProfileField
+              label="ZIP code"
+              value={zipCode}
+              onChangeText={setZipCode}
+              keyboardType="number-pad"
+              placeholder="90401"
+            />
+            <ProfileField
+              label="Travel radius (miles)"
+              value={travelRadiusMiles}
+              onChangeText={setTravelRadiusMiles}
+              keyboardType="number-pad"
+              placeholder="10"
+            />
+            <ProfileField
+              label="Bio"
+              value={bio}
+              onChangeText={setBio}
+              placeholder="Tell people how you like to work."
+              multiline
+            />
+
+            {error ? <Text className="mt-3 text-sm font-medium text-[#b42318]">{error}</Text> : null}
+
+            <View className="mt-4 flex-row gap-3">
+              <Pressable
+                onPress={() => setIsEditing(false)}
+                className="flex-1 rounded-full border border-[#d9d2c7] bg-white px-4 py-4"
+              >
+                <Text className="text-center text-sm font-bold text-[#08101c]">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => void handleSave()}
+                className="flex-1 rounded-full bg-[#08101c] px-4 py-4"
+              >
+                <Text className="text-center text-sm font-bold text-white">
+                  {status === "loading" ? "Saving..." : "Save changes"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
       </View>
 
       <View className="mt-8 rounded-[28px] border border-[#e8e1d5] bg-[#08101c] px-5 py-5">
@@ -75,6 +184,38 @@ export default function ProfileScreen() {
         <InfoRow icon="shield-checkmark-outline" text="ZIP coverage controls which taskers can see and join local work." />
       </View>
     </Screen>
+  );
+}
+
+function ProfileField({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  keyboardType,
+  multiline
+}: {
+  label: string;
+  value: string;
+  onChangeText: (value: string) => void;
+  placeholder: string;
+  keyboardType?: "default" | "number-pad";
+  multiline?: boolean;
+}) {
+  return (
+    <View className="mt-4">
+      <Text className="text-xs font-semibold uppercase tracking-[1px] text-[#5b6779]">{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="#94a3b8"
+        keyboardType={keyboardType}
+        multiline={multiline}
+        textAlignVertical={multiline ? "top" : "center"}
+        className={`mt-2 rounded-[20px] border border-[#ded6ca] bg-white px-4 py-4 text-sm text-[#08101c] ${multiline ? "min-h-[112px]" : ""}`}
+      />
+    </View>
   );
 }
 

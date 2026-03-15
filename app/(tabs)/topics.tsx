@@ -1,4 +1,4 @@
-import { ComponentProps, useMemo, useState } from "react";
+import { ComponentProps, useState } from "react";
 import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -11,7 +11,6 @@ export default function PostTaskScreen() {
   const createTask = useAppStore((state) => state.createTask);
   const selectRole = useAppStore((state) => state.selectRole);
   const error = useAppStore((state) => state.error);
-  const categories = useAppStore((state) => state.categories);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -20,8 +19,6 @@ export default function PostTaskScreen() {
   const [timeline, setTimeline] = useState("Tomorrow evening");
   const [budget, setBudget] = useState("120");
   const [tags, setTags] = useState("same day, careful handling");
-
-  const defaultCategoryId = useMemo(() => categories[0]?.id ?? "cleaning", [categories]);
 
   const submit = async () => {
     const parsedBudget = Number(budget);
@@ -40,7 +37,7 @@ export default function PostTaskScreen() {
     const taskId = await createTask({
       title: title.trim(),
       description: description.trim(),
-      categoryId: defaultCategoryId,
+      categoryId: "general",
       location: location.trim(),
       zipCode: zipCode.trim(),
       budget: parsedBudget,

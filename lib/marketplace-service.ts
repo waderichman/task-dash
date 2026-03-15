@@ -1,7 +1,5 @@
-import { mockMarketplace } from "@/lib/mock-marketplace";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase";
 import {
-  Category,
   Conversation,
   ConversationType,
   CurrentAccount,
@@ -23,6 +21,7 @@ type ProfileRow = {
   bio: string | null;
   home_base: string | null;
   zip_code: string;
+  travel_radius_miles: number | null;
   active_role: UserRole | null;
 };
 
@@ -144,7 +143,6 @@ function buildUsers(
         posterRating: ratingSummary(reviews, profile.id, "poster"),
         jobsCompleted,
         tasksPosted,
-        responseTime: "Replies quickly",
         avatarColor: "#d8f6df",
         zipCode: profile.zip_code,
         serviceZipCodes: serviceAreaMap.get(profile.id) ?? [profile.zip_code]
@@ -179,6 +177,7 @@ function buildCurrentAccount(
     homeBase: currentProfile.home_base ?? `ZIP ${currentProfile.zip_code}`,
     zipCode: currentProfile.zip_code,
     serviceZipCodes: serviceAreaMap.get(currentProfile.id) ?? [currentProfile.zip_code],
+    travelRadiusMiles: currentProfile.travel_radius_miles ?? 10,
     bio: currentProfile.bio ?? "TaskDash member",
     posterStats: {
       tasksPosted: postedTasks.length,
@@ -297,7 +296,6 @@ async function loadBaseRows() {
   const [
     profilesResult,
     serviceAreasResult,
-    categoriesResult,
     tasksResult,
     tagsResult,
     conversationsResult,
@@ -305,9 +303,8 @@ async function loadBaseRows() {
     messagesResult,
     reviewsResult
   ] = await Promise.all([
-    supabase.from("profiles").select("id, full_name, email, bio, home_base, zip_code, active_role"),
+    supabase.from("profiles").select("id, full_name, email, bio, home_base, zip_code, travel_radius_miles, active_role"),
     supabase.from("tasker_service_areas").select("profile_id, zip_code"),
-    supabase.from("categories").select("id, label, icon, accent").order("label"),
     supabase.from("tasks").select("*").order("posted_at", { ascending: false }),
     supabase.from("task_tags").select("task_id, label"),
     supabase.from("conversations").select("id, task_id, thread_type, tasker_id").order("created_at", { ascending: false }),
@@ -319,7 +316,6 @@ async function loadBaseRows() {
   for (const result of [
     profilesResult,
     serviceAreasResult,
-    categoriesResult,
     tasksResult,
     tagsResult,
     conversationsResult,
@@ -334,7 +330,6 @@ async function loadBaseRows() {
     currentUserId,
     profiles: (profilesResult.data ?? []) as ProfileRow[],
     serviceAreas: (serviceAreasResult.data ?? []) as ServiceAreaRow[],
-    categories: (categoriesResult.data ?? []) as Category[],
     taskRows: (tasksResult.data ?? []) as TaskRow[],
     taskTags: (tagsResult.data ?? []) as TaskTagRow[],
     conversationRows: (conversationsResult.data ?? []) as ConversationRow[],
@@ -372,7 +367,6 @@ export async function fetchMarketplaceFromSupabase(): Promise<MarketplacePayload
 
   return {
     currentAccount,
-    categories: rows.categories,
     users,
     tasks,
     conversations,
@@ -676,9 +670,6 @@ export async function leaveReviewInSupabase(input: {
 }
 
 export async function fetchMarketplace(): Promise<MarketplacePayload> {
-  if (!hasSupabaseEnv()) {
-    return mockMarketplace;
-  }
-
+  ensureSupabase();
   return fetchMarketplaceFromSupabase();
 }

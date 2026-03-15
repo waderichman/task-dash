@@ -7,6 +7,7 @@ create table if not exists public.profiles (
   bio text default '',
   home_base text default '',
   zip_code text not null check (zip_code ~ '^\d{5}$'),
+  travel_radius_miles integer not null default 10 check (travel_radius_miles between 0 and 50),
   active_role text not null default 'poster' check (active_role in ('poster', 'tasker')),
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
@@ -18,6 +19,14 @@ create table if not exists public.tasker_service_areas (
   zip_code text not null check (zip_code ~ '^\d{5}$'),
   created_at timestamptz not null default timezone('utc', now()),
   unique (profile_id, zip_code)
+);
+
+create table if not exists public.zip_codes (
+  zip_code text primary key check (zip_code ~ '^\d{5}$'),
+  city text,
+  state_code text,
+  latitude double precision not null,
+  longitude double precision not null
 );
 
 create table if not exists public.categories (
@@ -89,6 +98,7 @@ create table if not exists public.reviews (
   unique (task_id, reviewer_id, reviewee_id, role)
 );
 
+alter table public.profiles add column if not exists travel_radius_miles integer not null default 10;
 alter table public.conversations add column if not exists tasker_id uuid references public.profiles (id) on delete cascade;
 alter table public.conversations add column if not exists thread_type text not null default 'private' check (thread_type in ('public', 'private'));
 update public.conversations set thread_type = coalesce(thread_type, 'private');
@@ -131,6 +141,7 @@ on public.conversations (task_id, tasker_id)
 where thread_type = 'private' and tasker_id is not null;
 
 create index if not exists idx_profiles_zip_code on public.profiles (zip_code);
+create index if not exists idx_zip_codes_zip_code on public.zip_codes (zip_code);
 create index if not exists idx_tasker_service_areas_zip_code on public.tasker_service_areas (zip_code);
 create index if not exists idx_tasks_zip_code on public.tasks (zip_code);
 create index if not exists idx_tasks_posted_by on public.tasks (posted_by);
@@ -140,6 +151,7 @@ create index if not exists idx_messages_conversation_id on public.messages (conv
 
 alter table public.profiles enable row level security;
 alter table public.tasker_service_areas enable row level security;
+alter table public.zip_codes enable row level security;
 alter table public.categories enable row level security;
 alter table public.tasks enable row level security;
 alter table public.task_tags enable row level security;
@@ -167,6 +179,12 @@ on public.tasker_service_areas for select
 to authenticated
 using (true);
 
+drop policy if exists "zip codes readable by signed in users" on public.zip_codes;
+create policy "zip codes readable by signed in users"
+on public.zip_codes for select
+to authenticated
+using (true);
+
 drop policy if exists "users manage own service areas" on public.tasker_service_areas;
 create policy "users manage own service areas"
 on public.tasker_service_areas for all
@@ -180,6 +198,86 @@ on public.categories for select
 to authenticated
 using (true);
 
+create or replace function public.zip_distance_miles(origin_zip text, target_zip text)
+returns numeric
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with origin as (
+    select latitude, longitude
+    from public.zip_codes
+    where zip_code = origin_zip
+  ),
+  target as (
+    select latitude, longitude
+    from public.zip_codes
+    where zip_code = target_zip
+  )
+  select
+    case
+      when exists(select 1 from origin) and exists(select 1 from target) then
+        3958.7613 * acos(
+          least(
+            1,
+            cos(radians((select latitude from origin))) *
+            cos(radians((select latitude from target))) *
+            cos(radians((select longitude from target)) - radians((select longitude from origin))) +
+            sin(radians((select latitude from origin))) *
+            sin(radians((select latitude from target)))
+          )
+        )
+      else null
+    end;
+$$;
+
+create or replace function public.nearby_zip_codes(origin_zip text, radius_miles integer)
+returns table (zip_code text, distance_miles numeric)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    z.zip_code,
+    public.zip_distance_miles(origin_zip, z.zip_code) as distance_miles
+  from public.zip_codes z
+  where public.zip_distance_miles(origin_zip, z.zip_code) is not null
+    and public.zip_distance_miles(origin_zip, z.zip_code) <= greatest(radius_miles, 0)
+  order by distance_miles asc, z.zip_code asc;
+$$;
+
+create or replace function public.tasker_can_reach_zip(profile_uuid uuid, target_zip text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with profile_data as (
+    select zip_code, travel_radius_miles
+    from public.profiles
+    where id = profile_uuid
+  )
+  select exists (
+    select 1
+    from profile_data pd
+    where
+      pd.zip_code = target_zip
+      or exists (
+        select 1
+        from public.tasker_service_areas tsa
+        where tsa.profile_id = profile_uuid
+          and tsa.zip_code = target_zip
+      )
+      or (
+        public.zip_distance_miles(pd.zip_code, target_zip) is not null
+        and public.zip_distance_miles(pd.zip_code, target_zip) <= pd.travel_radius_miles
+      )
+  );
+$$;
+
 drop policy if exists "tasks are visible to posters and matching taskers" on public.tasks;
 create policy "tasks are visible to posters and matching taskers"
 on public.tasks for select
@@ -187,12 +285,7 @@ to authenticated
 using (
   posted_by = auth.uid()
   or assigned_to = auth.uid()
-  or exists (
-    select 1
-    from public.tasker_service_areas tsa
-    where tsa.profile_id = auth.uid()
-      and tsa.zip_code = tasks.zip_code
-  )
+  or public.tasker_can_reach_zip(auth.uid(), tasks.zip_code)
 );
 
 drop policy if exists "posters create their own tasks" on public.tasks;
@@ -220,12 +313,7 @@ using (
       and (
         tasks.posted_by = auth.uid()
         or tasks.assigned_to = auth.uid()
-        or exists (
-          select 1
-          from public.tasker_service_areas tsa
-          where tsa.profile_id = auth.uid()
-            and tsa.zip_code = tasks.zip_code
-        )
+        or public.tasker_can_reach_zip(auth.uid(), tasks.zip_code)
       )
   )
 );
@@ -265,12 +353,7 @@ using (
         or conversations.tasker_id = auth.uid()
         or (
           conversations.thread_type = 'public'
-          and exists (
-            select 1
-            from public.tasker_service_areas tsa
-            where tsa.profile_id = auth.uid()
-              and tsa.zip_code = tasks.zip_code
-          )
+          and public.tasker_can_reach_zip(auth.uid(), tasks.zip_code)
         )
       )
   )
@@ -290,12 +373,7 @@ using (
         or conversations.tasker_id = auth.uid()
         or (
           conversations.thread_type = 'public'
-          and exists (
-            select 1
-            from public.tasker_service_areas tsa
-            where tsa.profile_id = auth.uid()
-              and tsa.zip_code = tasks.zip_code
-          )
+          and public.tasker_can_reach_zip(auth.uid(), tasks.zip_code)
         )
       )
   )
@@ -330,24 +408,14 @@ with check (
         or (
           conversations.thread_type = 'public'
           and conversations.tasker_id is null
-          and exists (
-            select 1
-            from public.tasker_service_areas tsa
-            where tsa.profile_id = auth.uid()
-              and tsa.zip_code = tasks.zip_code
-          )
+          and public.tasker_can_reach_zip(auth.uid(), tasks.zip_code)
         )
         or (
           conversations.thread_type = 'private'
           and
           conversations.tasker_id = auth.uid()
           and tasks.posted_by <> auth.uid()
-          and exists (
-            select 1
-            from public.tasker_service_areas tsa
-            where tsa.profile_id = auth.uid()
-              and tsa.zip_code = tasks.zip_code
-          )
+          and public.tasker_can_reach_zip(auth.uid(), tasks.zip_code)
         )
       )
   )
@@ -368,12 +436,7 @@ using (
         or conversations.tasker_id = auth.uid()
         or (
           conversations.thread_type = 'public'
-          and exists (
-            select 1
-            from public.tasker_service_areas tsa
-            where tsa.profile_id = auth.uid()
-              and tsa.zip_code = tasks.zip_code
-          )
+          and public.tasker_can_reach_zip(auth.uid(), tasks.zip_code)
         )
       )
   )
@@ -401,12 +464,7 @@ with check (
           and (
             conversation_participants.profile_id = auth.uid()
             or tasks.posted_by = auth.uid()
-            or exists (
-              select 1
-              from public.tasker_service_areas tsa
-              where tsa.profile_id = auth.uid()
-                and tsa.zip_code = tasks.zip_code
-            )
+            or public.tasker_can_reach_zip(auth.uid(), tasks.zip_code)
           )
         )
         or (
@@ -436,12 +494,7 @@ using (
         or conversations.tasker_id = auth.uid()
         or (
           conversations.thread_type = 'public'
-          and exists (
-            select 1
-            from public.tasker_service_areas tsa
-            where tsa.profile_id = auth.uid()
-              and tsa.zip_code = tasks.zip_code
-          )
+          and public.tasker_can_reach_zip(auth.uid(), tasks.zip_code)
         )
       )
   )
@@ -463,12 +516,7 @@ with check (
         or conversations.tasker_id = auth.uid()
         or (
           conversations.thread_type = 'public'
-          and exists (
-            select 1
-            from public.tasker_service_areas tsa
-            where tsa.profile_id = auth.uid()
-              and tsa.zip_code = tasks.zip_code
-          )
+          and public.tasker_can_reach_zip(auth.uid(), tasks.zip_code)
         )
       )
   )

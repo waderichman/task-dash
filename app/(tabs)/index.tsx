@@ -38,6 +38,7 @@ export default function DiscoverScreen() {
   const error = useAppStore((state) => state.error);
   const refreshMarketplace = useAppStore((state) => state.refreshMarketplace);
   const status = useAppStore((state) => state.status);
+  const beginThreadOpen = useAppStore((state) => state.beginThreadOpen);
   const openConversationForTask = useAppStore((state) => state.openConversationForTask);
   const openPublicConversationForTask = useAppStore((state) => state.openPublicConversationForTask);
 
@@ -51,18 +52,16 @@ export default function DiscoverScreen() {
   const openNearbyTasks = tasks.filter((task) => task.status === "open");
   const visibleTasks = activeRole === "poster" ? openManagedTasks : openNearbyTasks;
 
-  const handleOpenTask = async (taskId: string) => {
-    const conversationId = await openConversationForTask(taskId);
-    if (conversationId) {
-      router.push("/(tabs)/alerts");
-    }
+  const handleOpenTask = (taskId: string) => {
+    beginThreadOpen(taskId, "private");
+    router.navigate("/alerts");
+    void openConversationForTask(taskId);
   };
 
-  const handleOpenPublicThread = async (taskId: string) => {
-    const conversationId = await openPublicConversationForTask(taskId);
-    if (conversationId) {
-      router.push("/(tabs)/alerts");
-    }
+  const handleOpenPublicThread = (taskId: string) => {
+    beginThreadOpen(taskId, "public");
+    router.navigate("/alerts");
+    void openPublicConversationForTask(taskId);
   };
 
   return (
@@ -102,9 +101,9 @@ export default function DiscoverScreen() {
           <QuickActionButton
             label={copy.primaryCta}
             filled
-            onPress={() => router.push(activeRole === "poster" ? "/(tabs)/topics" : "/(tabs)/index")}
+            onPress={() => router.push(activeRole === "poster" ? "/topics" : "/")}
           />
-          <QuickActionButton label={copy.secondaryCta} onPress={() => router.push("/(tabs)/alerts")} />
+          <QuickActionButton label={copy.secondaryCta} onPress={() => router.push("/alerts")} />
         </View>
       </LinearGradient>
 
@@ -136,7 +135,7 @@ export default function DiscoverScreen() {
 
       <SectionHeader
         title={activeRole === "poster" ? "Manage your open jobs" : "Nearby jobs"}
-        detail={activeRole === "poster" ? "Reply fast and keep threads moving" : "Open a thread to negotiate"}
+        detail={activeRole === "poster" ? "Keep chats moving" : "Open a thread to negotiate"}
       />
 
       <FlatList
@@ -154,8 +153,8 @@ export default function DiscoverScreen() {
             }
             tasker={item.assignedTo ? users.find((user) => user.id === item.assignedTo) : undefined}
             isPosterView={activeRole === "poster"}
-            onOpenThread={() => void handleOpenTask(item.id)}
-            onOpenPublicThread={() => void handleOpenPublicThread(item.id)}
+            onOpenThread={() => handleOpenTask(item.id)}
+            onOpenPublicThread={() => handleOpenPublicThread(item.id)}
           />
         )}
         ListEmptyComponent={
@@ -184,8 +183,8 @@ export default function DiscoverScreen() {
                 poster={currentAccount ?? undefined}
                 tasker={item.assignedTo ? users.find((user) => user.id === item.assignedTo) : undefined}
                 isPosterView
-                onOpenThread={() => void handleOpenTask(item.id)}
-                onOpenPublicThread={() => void handleOpenPublicThread(item.id)}
+                onOpenThread={() => handleOpenTask(item.id)}
+                onOpenPublicThread={() => handleOpenPublicThread(item.id)}
               />
             )}
             ListEmptyComponent={<EmptyState title="No completed jobs yet" body="Completed work will land here." />}
@@ -198,7 +197,7 @@ export default function DiscoverScreen() {
 
 function SectionHeader({ title, detail }: { title: string; detail: string }) {
   return (
-    <View className="mb-4 mt-8 flex-row items-center justify-between">
+    <View className="mb-4 mt-8 gap-1">
       <Text className="text-lg font-bold text-[#08101c]">{title}</Text>
       <Text className="text-sm font-semibold text-[#56705e]">{detail}</Text>
     </View>
@@ -323,7 +322,7 @@ function TaskCard({
         <Text className="mt-2 text-base font-bold text-[#08101c]">
           {isPosterView ? `${task.offers} offers | ${task.questions} questions` : poster?.name ?? "Local poster"}
         </Text>
-        <View className="mt-3 flex-row gap-3">
+        <View className="mt-3 flex-row flex-wrap gap-3">
           {isPosterView ? (
             <MetaPill icon="chatbubble-ellipses-outline" text="Review each tasker chat and compare offers" />
           ) : (
@@ -387,9 +386,9 @@ function Pill({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: stri
 
 function MetaPill({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: string }) {
   return (
-    <View className="flex-row items-center rounded-full bg-white px-3 py-2">
+    <View className="flex-row shrink items-center rounded-full bg-white px-3 py-2">
       <Ionicons name={icon} size={14} color="#6f7d8d" />
-      <Text className="ml-2 text-xs font-semibold text-[#5b6779]">{text}</Text>
+      <Text className="ml-2 shrink text-xs font-semibold text-[#5b6779]">{text}</Text>
     </View>
   );
 }

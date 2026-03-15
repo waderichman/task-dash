@@ -2,13 +2,6 @@ export type UserRole = "poster" | "tasker";
 
 export type RatingRole = "poster" | "tasker";
 
-export type Category = {
-  id: string;
-  label: string;
-  icon: string;
-  accent: string;
-};
-
 export type RatingSummary = {
   average: number;
   count: number;
@@ -22,7 +15,6 @@ export type MarketplaceUser = {
   posterRating: RatingSummary;
   jobsCompleted: number;
   tasksPosted: number;
-  responseTime: string;
   avatarColor: string;
   zipCode: string;
   serviceZipCodes: string[];
@@ -89,6 +81,7 @@ export type CurrentAccount = {
   homeBase: string;
   zipCode: string;
   serviceZipCodes: string[];
+  travelRadiusMiles: number;
   bio: string;
   posterStats: {
     tasksPosted: number;
@@ -106,7 +99,6 @@ export type CurrentAccount = {
 
 export type MarketplacePayload = {
   currentAccount: CurrentAccount;
-  categories: Category[];
   users: MarketplaceUser[];
   tasks: Task[];
   conversations: Conversation[];

@@ -22,6 +22,7 @@ export default function AuthScreen() {
   const [password, setPassword] = useState("");
   const [homeBase, setHomeBase] = useState("");
   const [zipCode, setZipCode] = useState("");
+  const [travelRadiusMiles, setTravelRadiusMiles] = useState("10");
   const [serviceZipCodes, setServiceZipCodes] = useState("");
   const [bio, setBio] = useState("");
 
@@ -53,6 +54,7 @@ export default function AuthScreen() {
             role,
             homeBase,
             zipCode,
+            travelRadiusMiles: Number(travelRadiusMiles) || 10,
             serviceZipCodes: serviceZipCodes.split(",").map((item) => item.trim()),
             bio
           });
@@ -79,7 +81,7 @@ export default function AuthScreen() {
           {mode === "login" ? "Sign in to your local marketplace" : "Create your TaskDash account"}
         </Text>
         <Text className="mt-3 text-sm leading-6 text-[#4f5d70]">
-          Posters post jobs by ZIP code. Taskers only see work inside the ZIP codes they cover.
+          Posters post jobs by ZIP code. Taskers can cover nearby ZIPs automatically with a travel radius.
         </Text>
       </LinearGradient>
 
@@ -111,11 +113,20 @@ export default function AuthScreen() {
               placeholder="90401"
               keyboardType="number-pad"
             />
+            {role === "tasker" ? (
+              <Field
+                label="Travel radius (miles)"
+                value={travelRadiusMiles}
+                onChangeText={setTravelRadiusMiles}
+                placeholder="10"
+                keyboardType="number-pad"
+              />
+            ) : null}
             <Field
-              label="Service ZIPs"
+              label="Extra ZIPs"
               value={serviceZipCodes}
               onChangeText={setServiceZipCodes}
-              placeholder="90401, 90402, 90403"
+              placeholder="Optional: 90402, 90403"
             />
             <Field
               label="Bio"
@@ -158,11 +169,6 @@ export default function AuthScreen() {
             </Text>
           )}
         </Pressable>
-
-        <Text className="mt-4 text-sm leading-6 text-[#5b6779]">
-          Demo fallback works with irene@taskdash.app and password taskdash123 if Supabase env is
-          not configured.
-        </Text>
       </View>
     </Screen>
   );
