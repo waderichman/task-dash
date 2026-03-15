@@ -21,29 +21,56 @@ export default function InboxScreen() {
   const status = useAppStore((state) => state.status);
   const [draft, setDraft] = useState("");
 
-  const selectedConversation =
-    conversations.find((conversation) => conversation.id === selectedConversationId) ??
-    conversations[0];
+  const senderLookup = useMemo(() => {
+    const entries = users.map((user) => [user.id, user.name] as const);
+    if (currentAccount) {
+      entries.push([currentAccount.id, currentAccount.name] as const);
+    }
 
+    return new Map(entries);
+  }, [currentAccount, users]);
+
+  const selectedConversation =
+    conversations.find((conversation) => conversation.id === selectedConversationId) ?? conversations[0];
   const selectedTask = tasks.find((task) => task.id === selectedConversation?.taskId);
-  const counterpartId = selectedConversation?.participantIds.find((id) => id !== currentAccount?.id);
-  const counterpart = users.find((user) => user.id === counterpartId);
+  const counterpartIds = (selectedConversation?.participantIds ?? []).filter((id) => id !== currentAccount?.id);
+  const counterpartUsers = counterpartIds
+    .map((id) => users.find((user) => user.id === id))
+    .filter((user): user is NonNullable<typeof user> => Boolean(user));
+  const counterpart = counterpartUsers[0];
+  const counterpartLabel =
+    counterpartUsers.length === 0
+      ? "Pick a thread above to see the full negotiation and reply."
+      : counterpartUsers.length === 1
+        ? `${counterpartUsers[0].name} | ZIP ${counterpartUsers[0].zipCode}`
+        : `${counterpartUsers[0].name} +${counterpartUsers.length - 1} more in this thread`;
   const latestOffer = [...(selectedConversation?.messages ?? [])]
     .reverse()
-    .find((message) => message.offerAmount);
+    .find((message) => typeof message.offerAmount === "number");
+  const selectedThreadType = selectedConversation?.threadType ?? "private";
 
   const threadRows = useMemo(
     () =>
       conversations.map((conversation) => {
         const task = tasks.find((item) => item.id === conversation.taskId);
-        const personId = conversation.participantIds.find((id) => id !== currentAccount?.id);
-        const person = users.find((user) => user.id === personId);
+        const threadUsers = conversation.participantIds
+          .filter((id) => id !== currentAccount?.id)
+          .map((id) => users.find((user) => user.id === id))
+          .filter((user): user is NonNullable<typeof user> => Boolean(user));
         const lastMessage = conversation.messages[conversation.messages.length - 1];
 
         return {
           id: conversation.id,
-          taskTitle: task?.title ?? "Task",
-          personName: person?.name ?? "Local user",
+          taskTitle: task?.title ?? "Job thread",
+          threadType: conversation.threadType ?? "private",
+          personName:
+            (conversation.threadType ?? "private") === "public"
+              ? "Public job thread"
+              : threadUsers.length === 0
+              ? "No replies yet"
+              : threadUsers.length === 1
+                ? threadUsers[0].name
+                : `${threadUsers[0].name} +${threadUsers.length - 1}`,
           preview: lastMessage?.text ?? "No messages yet",
           amount: lastMessage?.offerAmount,
           active: conversation.id === selectedConversation?.id,
@@ -106,18 +133,15 @@ export default function InboxScreen() {
 
   return (
     <Screen>
-      <Text className="text-3xl font-black text-[#08101c]">Inbox</Text>
+      <Text className="text-3xl font-black text-[#08101c]">Threads</Text>
       <Text className="mt-3 text-sm leading-6 text-[#5b6779]">
-        Ask questions, negotiate price, accept the deal, and leave a review after completion.
+        Each job has a public thread for general questions, plus private tasker chats for pricing and negotiation.
       </Text>
 
       {error ? (
         <View className="mt-5 rounded-[20px] border border-[#efd3d3] bg-[#fff4f4] px-4 py-4">
           <Text className="text-sm font-semibold text-[#8b3b3b]">{error}</Text>
-          <Pressable
-            onPress={() => void refreshMarketplace()}
-            className="mt-3 rounded-full bg-[#08101c] px-4 py-3"
-          >
+          <Pressable onPress={() => void refreshMarketplace()} className="mt-3 rounded-full bg-[#08101c] px-4 py-3">
             <Text className="text-center text-sm font-bold text-white">
               {status === "loading" ? "Refreshing..." : "Retry sync"}
             </Text>
@@ -126,9 +150,7 @@ export default function InboxScreen() {
       ) : null}
 
       <View className="mt-8 rounded-[28px] border border-[#e8e1d5] bg-white px-4 py-4">
-        <Text className="text-sm font-semibold uppercase tracking-[2px] text-[#6f7d8d]">
-          Active threads
-        </Text>
+        <Text className="text-sm font-semibold uppercase tracking-[2px] text-[#6f7d8d]">Open threads</Text>
         <FlatList
           className="mt-4"
           data={threadRows}
@@ -139,107 +161,124 @@ export default function InboxScreen() {
           renderItem={({ item }) => (
             <Pressable
               onPress={() => selectConversation(item.id)}
-              className={`w-[224px] rounded-[24px] border px-4 py-4 ${
+              className={`w-[232px] rounded-[24px] border px-4 py-4 ${
                 item.active ? "border-[#08101c] bg-[#d8f6df]" : "border-[#ece4d8] bg-[#faf7f2]"
               }`}
             >
-              <Text className="text-sm font-bold text-[#08101c]">{item.personName}</Text>
-              <Text className="mt-1 text-sm text-[#5b6779]">{item.taskTitle}</Text>
+              <Text className="text-sm font-bold text-[#08101c]">{item.taskTitle}</Text>
+              <Text className="mt-1 text-sm text-[#5b6779]">
+                {(item.threadType === "public" ? "Public" : "Private") + " | " + item.personName}
+              </Text>
               <Text className="mt-4 text-sm leading-5 text-[#6f7d8d]" numberOfLines={2}>
                 {item.preview}
               </Text>
               <View className="mt-4 flex-row items-center justify-between">
-                <Text className="text-xs font-semibold uppercase tracking-[1.5px] text-[#6f7d8d]">
-                  {item.status}
-                </Text>
-                {item.amount ? (
-                  <Text className="text-sm font-bold text-[#214a35]">${item.amount}</Text>
-                ) : null}
+                <ThreadBadge text={item.status} />
+                {item.amount ? <Text className="text-sm font-bold text-[#214a35]">${item.amount}</Text> : null}
               </View>
             </Pressable>
           )}
+          ListEmptyComponent={
+            <View className="w-[260px] rounded-[24px] border border-dashed border-[#d8d0c3] bg-[#faf7f2] px-5 py-6">
+              <Text className="text-base font-bold text-[#08101c]">No threads yet</Text>
+              <Text className="mt-2 text-sm leading-6 text-[#5b6779]">
+                Start a private chat from Discover, or wait for taskers to open chats on your posted jobs.
+              </Text>
+            </View>
+          }
         />
       </View>
 
       <View className="mt-6 rounded-[28px] border border-[#e8e1d5] bg-[#08101c] px-5 py-5">
-        <Text className="text-xs font-semibold uppercase tracking-[2px] text-[#9cb4a4]">
-          Current negotiation
-        </Text>
+        <Text className="text-xs font-semibold uppercase tracking-[2px] text-[#9cb4a4]">Selected thread</Text>
         <Text className="mt-3 text-2xl font-bold leading-8 text-white">
-          {selectedTask?.title ?? "Select a thread"}
+          {selectedTask?.title ?? "Choose a thread to start"}
         </Text>
         <Text className="mt-2 text-sm leading-6 text-[#c0c9d5]">
-          {counterpart
-            ? `${counterpart.name} | ${counterpart.taskerRating.average.toFixed(1)} tasker stars | ${counterpart.posterRating.average.toFixed(1)} poster stars`
-            : "Open a conversation to start negotiating."}
+          {selectedThreadType === "public"
+            ? `Public thread for job questions in ZIP ${selectedTask?.zipCode ?? ""}`
+            : counterpartLabel}
         </Text>
+
+        {selectedTask ? (
+          <View className="mt-5 flex-row flex-wrap gap-2">
+            <InlinePill icon="location-outline" text={selectedTask.location} dark />
+            <InlinePill icon="navigate-outline" text={selectedTask.zipCode} dark />
+            <InlinePill icon="cash-outline" text={`$${selectedTask.agreedPrice ?? selectedTask.budget}`} dark />
+            <InlinePill icon="layers-outline" text={selectedTask.status} dark />
+          </View>
+        ) : null}
 
         <View className="mt-5 gap-3">
           <View className="flex-row gap-3">
             <QuickAction
-              label="Ask question"
+              label="Ask a question"
               onPress={() => {
                 setDraft("Can you confirm the access details?");
               }}
             />
-            <QuickAction label="Offer $140" onPress={() => submitOffer(140)} />
-            <QuickAction label="Offer $160" onPress={() => submitOffer(160)} />
+            {selectedThreadType === "private" ? <QuickAction label="Offer $140" onPress={() => submitOffer(140)} /> : null}
+            {selectedThreadType === "private" ? <QuickAction label="Offer $160" onPress={() => submitOffer(160)} /> : null}
           </View>
-          <View className="flex-row gap-3">
-            <QuickAction
-              label={latestOffer?.offerAmount ? `Accept $${latestOffer.offerAmount}` : "Accept offer"}
-              onPress={() => void (selectedConversation && acceptLatestOffer(selectedConversation.id))}
-            />
-            <QuickAction
-              label="Mark complete"
-              onPress={() => void (selectedTask && completeTask(selectedTask.id))}
-            />
-          </View>
+          {selectedThreadType === "private" ? (
+            <View className="flex-row gap-3">
+              <QuickAction
+                label={latestOffer?.offerAmount ? `Accept $${latestOffer.offerAmount}` : "Accept latest offer"}
+                onPress={() => void (selectedConversation && acceptLatestOffer(selectedConversation.id))}
+              />
+              <QuickAction label="Mark complete" onPress={() => void (selectedTask && completeTask(selectedTask.id))} />
+            </View>
+          ) : null}
         </View>
       </View>
 
       <View className="mt-6 rounded-[28px] border border-[#e8e1d5] bg-white px-4 py-4">
-        {selectedConversation?.messages.map((message) => {
-          const isSystem = message.kind === "system";
-          const isMine = message.senderId === currentAccount?.id;
-          const sender = isSystem
-            ? "System"
-            : isMine
-              ? currentAccount?.name
-              : counterpart?.name ?? "Local user";
+        <Text className="text-sm font-semibold uppercase tracking-[2px] text-[#6f7d8d]">Conversation</Text>
+        <View className="mt-4">
+          {selectedConversation?.messages.length ? (
+            selectedConversation.messages.map((message) => {
+              const isSystem = message.kind === "system";
+              const isMine = message.senderId === currentAccount?.id;
+              const sender = isSystem
+                ? "System"
+                : isMine
+                  ? currentAccount?.name
+                  : senderLookup.get(message.senderId) ?? "Local user";
 
-          return (
-            <View
-              key={message.id}
-              className={`mb-3 rounded-[22px] px-4 py-4 ${
-                isSystem
-                  ? "bg-[#f4f1ea]"
-                  : isMine
-                    ? "self-end bg-[#d8f6df]"
-                    : "bg-[#f6f3ed]"
-              }`}
-            >
-              <View className="flex-row items-center justify-between">
-                <Text className="text-sm font-bold text-[#08101c]">{sender}</Text>
-                <Text className="text-xs font-semibold uppercase tracking-[1.5px] text-[#6f7d8d]">
-                  {message.kind}
-                </Text>
-              </View>
-              <Text className="mt-2 text-sm leading-6 text-[#445164]">{message.text}</Text>
-              {message.offerAmount ? (
-                <View className="mt-3 flex-row items-center rounded-full bg-white/70 px-3 py-2">
-                  <Ionicons name="cash-outline" size={14} color="#214a35" />
-                  <Text className="ml-2 text-xs font-bold text-[#214a35]">
-                    ${message.offerAmount} proposed
-                  </Text>
+              return (
+                <View
+                  key={message.id}
+                  className={`mb-3 rounded-[22px] px-4 py-4 ${
+                    isSystem ? "bg-[#f4f1ea]" : isMine ? "self-end bg-[#d8f6df]" : "bg-[#f6f3ed]"
+                  }`}
+                >
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-sm font-bold text-[#08101c]">{sender}</Text>
+                    <Text className="text-xs font-semibold uppercase tracking-[1.5px] text-[#6f7d8d]">
+                      {message.kind}
+                    </Text>
+                  </View>
+                  <Text className="mt-2 text-sm leading-6 text-[#445164]">{message.text}</Text>
+                  {message.offerAmount ? (
+                    <View className="mt-3 flex-row items-center rounded-full bg-white/70 px-3 py-2">
+                      <Ionicons name="cash-outline" size={14} color="#214a35" />
+                      <Text className="ml-2 text-xs font-bold text-[#214a35]">${message.offerAmount} proposed</Text>
+                    </View>
+                  ) : null}
+                  <Text className="mt-3 text-xs text-[#7d8898]">{message.sentAt}</Text>
                 </View>
-              ) : null}
-              <Text className="mt-3 text-xs text-[#7d8898]">{message.sentAt}</Text>
+              );
+            })
+          ) : (
+            <View className="rounded-[22px] bg-[#faf7f2] px-4 py-6">
+              <Text className="text-sm leading-6 text-[#5b6779]">
+                Messages and offers for the selected thread will appear here.
+              </Text>
             </View>
-          );
-        })}
+          )}
+        </View>
 
-        {reviewTargets.canReviewTasker || reviewTargets.canReviewPoster ? (
+        {selectedThreadType === "private" && (reviewTargets.canReviewTasker || reviewTargets.canReviewPoster) ? (
           <View className="mt-2 rounded-[22px] bg-[#faf7f2] px-4 py-4">
             <Text className="text-sm font-bold text-[#08101c]">Leave a rating</Text>
             <View className="mt-4 flex-row gap-3">
@@ -282,21 +321,15 @@ export default function InboxScreen() {
         <TextInput
           value={draft}
           onChangeText={setDraft}
-          placeholder="Write a message or ask a question"
+          placeholder="Write your message"
           placeholderTextColor="#8a95a5"
-          className="mt-3 rounded-[22px] border border-[#e8e1d5] bg-[#faf7f2] px-4 py-4 text-[#08101c]"
+          className="mt-4 rounded-[22px] border border-[#e8e1d5] bg-[#faf7f2] px-4 py-4 text-[#08101c]"
         />
         <View className="mt-4 flex-row gap-3">
-          <Pressable
-            onPress={() => submitMessage("message")}
-            className="flex-1 rounded-full bg-[#08101c] px-4 py-4"
-          >
+          <Pressable onPress={() => submitMessage("message")} className="flex-1 rounded-full bg-[#08101c] px-4 py-4">
             <Text className="text-center text-sm font-bold text-white">Send message</Text>
           </Pressable>
-          <Pressable
-            onPress={() => submitMessage("question")}
-            className="flex-1 rounded-full bg-[#d8f6df] px-4 py-4"
-          >
+          <Pressable onPress={() => submitMessage("question")} className="flex-1 rounded-full bg-[#d8f6df] px-4 py-4">
             <Text className="text-center text-sm font-bold text-[#08101c]">Send question</Text>
           </Pressable>
         </View>
@@ -318,5 +351,30 @@ function QuickReview({ label, onPress }: { label: string; onPress: () => void })
     <Pressable onPress={onPress} className="flex-1 rounded-full bg-[#08101c] px-4 py-3">
       <Text className="text-center text-sm font-semibold text-white">{label}</Text>
     </Pressable>
+  );
+}
+
+function InlinePill({
+  icon,
+  text,
+  dark = false
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  text: string;
+  dark?: boolean;
+}) {
+  return (
+    <View className={`flex-row items-center rounded-full px-3 py-2 ${dark ? "bg-white/10" : "bg-[#f6f3ed]"}`}>
+      <Ionicons name={icon} size={14} color={dark ? "#d9e4d7" : "#6f7d8d"} />
+      <Text className={`ml-2 text-xs font-semibold ${dark ? "text-white" : "text-[#5b6779]"}`}>{text}</Text>
+    </View>
+  );
+}
+
+function ThreadBadge({ text }: { text: string }) {
+  return (
+    <View className="rounded-full bg-white px-3 py-2">
+      <Text className="text-[10px] font-semibold uppercase tracking-[1.5px] text-[#6f7d8d]">{text}</Text>
+    </View>
   );
 }

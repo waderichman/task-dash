@@ -53,8 +53,10 @@ create table if not exists public.task_tags (
 create table if not exists public.conversations (
   id uuid primary key default gen_random_uuid(),
   task_id uuid not null references public.tasks (id) on delete cascade,
+  thread_type text not null default 'private' check (thread_type in ('public', 'private')),
+  tasker_id uuid references public.profiles (id) on delete cascade,
   created_at timestamptz not null default timezone('utc', now()),
-  unique (task_id)
+  unique (task_id, tasker_id)
 );
 
 create table if not exists public.conversation_participants (
@@ -87,10 +89,53 @@ create table if not exists public.reviews (
   unique (task_id, reviewer_id, reviewee_id, role)
 );
 
+alter table public.conversations add column if not exists tasker_id uuid references public.profiles (id) on delete cascade;
+alter table public.conversations add column if not exists thread_type text not null default 'private' check (thread_type in ('public', 'private'));
+update public.conversations set thread_type = coalesce(thread_type, 'private');
+
+do $$
+declare
+  existing_constraint_name text;
+begin
+  select conname
+  into existing_constraint_name
+  from pg_constraint
+  where conrelid = 'public.conversations'::regclass
+    and contype = 'u'
+    and conname <> 'conversations_task_id_tasker_id_key'
+    and pg_get_constraintdef(oid) like 'UNIQUE (task_id)%';
+
+  if existing_constraint_name is not null then
+    execute format('alter table public.conversations drop constraint %I', existing_constraint_name);
+  end if;
+end $$;
+
+update public.conversations c
+set tasker_id = (
+  select cp.profile_id
+  from public.conversation_participants cp
+  join public.tasks t on t.id = c.task_id
+  where cp.conversation_id = c.id
+    and cp.profile_id <> t.posted_by
+  limit 1
+)
+where c.tasker_id is null;
+
+drop index if exists idx_conversations_task_tasker_unique;
+create unique index if not exists idx_conversations_public_unique
+on public.conversations (task_id)
+where thread_type = 'public';
+
+create unique index if not exists idx_conversations_task_tasker_unique
+on public.conversations (task_id, tasker_id)
+where thread_type = 'private' and tasker_id is not null;
+
 create index if not exists idx_profiles_zip_code on public.profiles (zip_code);
 create index if not exists idx_tasker_service_areas_zip_code on public.tasker_service_areas (zip_code);
 create index if not exists idx_tasks_zip_code on public.tasks (zip_code);
 create index if not exists idx_tasks_posted_by on public.tasks (posted_by);
+create index if not exists idx_conversations_task_id on public.conversations (task_id);
+create index if not exists idx_conversations_task_tasker on public.conversations (task_id, tasker_id);
 create index if not exists idx_messages_conversation_id on public.messages (conversation_id, sent_at);
 
 alter table public.profiles enable row level security;
@@ -213,9 +258,21 @@ to authenticated
 using (
   exists (
     select 1
-    from public.conversation_participants cp
-    where cp.conversation_id = conversations.id
-      and cp.profile_id = auth.uid()
+    from public.tasks
+    where tasks.id = conversations.task_id
+      and (
+        tasks.posted_by = auth.uid()
+        or conversations.tasker_id = auth.uid()
+        or (
+          conversations.thread_type = 'public'
+          and exists (
+            select 1
+            from public.tasker_service_areas tsa
+            where tsa.profile_id = auth.uid()
+              and tsa.zip_code = tasks.zip_code
+          )
+        )
+      )
   )
 );
 
@@ -226,12 +283,34 @@ to authenticated
 using (
   exists (
     select 1
-    from public.conversation_participants cp
-    where cp.conversation_id = conversations.id
-      and cp.profile_id = auth.uid()
+    from public.tasks
+    where tasks.id = conversations.task_id
+      and (
+        tasks.posted_by = auth.uid()
+        or conversations.tasker_id = auth.uid()
+        or (
+          conversations.thread_type = 'public'
+          and exists (
+            select 1
+            from public.tasker_service_areas tsa
+            where tsa.profile_id = auth.uid()
+              and tsa.zip_code = tasks.zip_code
+          )
+        )
+      )
   )
 )
-with check (true);
+with check (
+  exists (
+    select 1
+    from public.tasks
+    where tasks.id = conversations.task_id
+      and (
+        tasks.posted_by = auth.uid()
+        or conversations.tasker_id = auth.uid()
+      )
+  )
+);
 
 drop policy if exists "visible task users can create conversations" on public.conversations;
 create policy "visible task users can create conversations"
@@ -243,13 +322,32 @@ with check (
     from public.tasks
     where tasks.id = conversations.task_id
       and (
-        tasks.posted_by = auth.uid()
-        or tasks.assigned_to = auth.uid()
-        or exists (
-          select 1
-          from public.tasker_service_areas tsa
-          where tsa.profile_id = auth.uid()
-            and tsa.zip_code = tasks.zip_code
+        (
+          tasks.posted_by = auth.uid()
+          and conversations.thread_type = 'public'
+          and conversations.tasker_id is null
+        )
+        or (
+          conversations.thread_type = 'public'
+          and conversations.tasker_id is null
+          and exists (
+            select 1
+            from public.tasker_service_areas tsa
+            where tsa.profile_id = auth.uid()
+              and tsa.zip_code = tasks.zip_code
+          )
+        )
+        or (
+          conversations.thread_type = 'private'
+          and
+          conversations.tasker_id = auth.uid()
+          and tasks.posted_by <> auth.uid()
+          and exists (
+            select 1
+            from public.tasker_service_areas tsa
+            where tsa.profile_id = auth.uid()
+              and tsa.zip_code = tasks.zip_code
+          )
         )
       )
   )
@@ -260,12 +358,24 @@ create policy "participants read conversation participants"
 on public.conversation_participants for select
 to authenticated
 using (
-  profile_id = auth.uid()
-  or exists (
+  exists (
     select 1
-    from public.conversation_participants cp
-    where cp.conversation_id = conversation_participants.conversation_id
-      and cp.profile_id = auth.uid()
+    from public.conversations
+    join public.tasks on tasks.id = conversations.task_id
+    where conversations.id = conversation_participants.conversation_id
+      and (
+        tasks.posted_by = auth.uid()
+        or conversations.tasker_id = auth.uid()
+        or (
+          conversations.thread_type = 'public'
+          and exists (
+            select 1
+            from public.tasker_service_areas tsa
+            where tsa.profile_id = auth.uid()
+              and tsa.zip_code = tasks.zip_code
+          )
+        )
+      )
   )
 );
 
@@ -286,24 +396,26 @@ with check (
     join public.tasks on tasks.id = conversations.task_id
     where conversations.id = conversation_participants.conversation_id
       and (
-        conversation_participants.profile_id = auth.uid()
-        or (
-          tasks.posted_by = auth.uid()
-          and exists (
-            select 1
-            from public.tasker_service_areas tsa
-            where tsa.profile_id = conversation_participants.profile_id
-              and tsa.zip_code = tasks.zip_code
+        (
+          conversations.thread_type = 'public'
+          and (
+            conversation_participants.profile_id = auth.uid()
+            or tasks.posted_by = auth.uid()
+            or exists (
+              select 1
+              from public.tasker_service_areas tsa
+              where tsa.profile_id = auth.uid()
+                and tsa.zip_code = tasks.zip_code
+            )
           )
         )
         or (
-          exists (
-            select 1
-            from public.tasker_service_areas tsa
-            where tsa.profile_id = auth.uid()
-              and tsa.zip_code = tasks.zip_code
+          conversations.thread_type = 'private'
+          and (
+            conversation_participants.profile_id = auth.uid()
+            or (tasks.posted_by = auth.uid() and conversation_participants.profile_id = conversations.tasker_id)
+            or (conversations.tasker_id = auth.uid() and conversation_participants.profile_id = tasks.posted_by)
           )
-          and conversation_participants.profile_id = tasks.posted_by
         )
       )
   )
@@ -316,9 +428,22 @@ to authenticated
 using (
   exists (
     select 1
-    from public.conversation_participants cp
-    where cp.conversation_id = messages.conversation_id
-      and cp.profile_id = auth.uid()
+    from public.conversations
+    join public.tasks on tasks.id = conversations.task_id
+    where conversations.id = messages.conversation_id
+      and (
+        tasks.posted_by = auth.uid()
+        or conversations.tasker_id = auth.uid()
+        or (
+          conversations.thread_type = 'public'
+          and exists (
+            select 1
+            from public.tasker_service_areas tsa
+            where tsa.profile_id = auth.uid()
+              and tsa.zip_code = tasks.zip_code
+          )
+        )
+      )
   )
 );
 
@@ -330,9 +455,22 @@ with check (
   sender_id = auth.uid()
   and exists (
     select 1
-    from public.conversation_participants cp
-    where cp.conversation_id = messages.conversation_id
-      and cp.profile_id = auth.uid()
+    from public.conversations
+    join public.tasks on tasks.id = conversations.task_id
+    where conversations.id = messages.conversation_id
+      and (
+        tasks.posted_by = auth.uid()
+        or conversations.tasker_id = auth.uid()
+        or (
+          conversations.thread_type = 'public'
+          and exists (
+            select 1
+            from public.tasker_service_areas tsa
+            where tsa.profile_id = auth.uid()
+              and tsa.zip_code = tasks.zip_code
+          )
+        )
+      )
   )
 );
 

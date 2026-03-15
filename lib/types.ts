@@ -61,9 +61,13 @@ export type Message = {
   offerAmount?: number;
 };
 
+export type ConversationType = "public" | "private";
+
 export type Conversation = {
   id: string;
   taskId: string;
+  threadType?: ConversationType;
+  taskerId?: string;
   participantIds: string[];
   messages: Message[];
 };

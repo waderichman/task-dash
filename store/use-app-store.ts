@@ -1,5 +1,4 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as Linking from "expo-linking";
 import { User } from "@supabase/supabase-js";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -96,6 +95,7 @@ type AppState = {
   signUp: (input: SignUpInput) => Promise<boolean>;
   logout: () => Promise<void>;
   createTask: (input: CreateTaskInput) => Promise<string | null>;
+  openPublicConversationForTask: (taskId: string) => Promise<string | null>;
   openConversationForTask: (taskId: string) => Promise<string | null>;
   sendMessage: (
     conversationId: string,
@@ -325,7 +325,10 @@ function buildDerivedState(
   const visibleTaskIds = new Set(tasks.map((task) => task.id));
   const conversations = allConversations.filter(
     (conversation) =>
-      conversation.participantIds.includes(currentAccount.id) && visibleTaskIds.has(conversation.taskId)
+      visibleTaskIds.has(conversation.taskId) &&
+      ((conversation.threadType ?? "private") === "public"
+        ? true
+        : conversation.participantIds.includes(currentAccount.id))
   );
   const users = buildVisibleUsers(accounts, currentAccount, activeRole);
 
@@ -617,10 +620,14 @@ export const useAppStore = create<AppState>()(
             error: null
           });
         } catch (syncError) {
+          console.error("TaskDash hydrateAuthSession failed", syncError);
           set({
             ...createEmptyAuthState(get().allReviews),
             status: "error",
-            error: syncError instanceof Error ? syncError.message : "Unable to load account"
+            error:
+              syncError instanceof Error
+                ? `Unable to load account: ${syncError.message}`
+                : "Unable to load account"
           });
         }
       },
@@ -733,9 +740,13 @@ export const useAppStore = create<AppState>()(
 
             return true;
           } catch (syncError) {
+            console.error("TaskDash login failed after auth", syncError);
             set({
               status: "error",
-              error: syncError instanceof Error ? syncError.message : "Unable to load account"
+              error:
+                syncError instanceof Error
+                  ? `Unable to load account: ${syncError.message}`
+                  : "Unable to load account"
             });
             return false;
           }
@@ -798,7 +809,7 @@ export const useAppStore = create<AppState>()(
             email: normalizedEmail,
             password: input.password,
             options: {
-              emailRedirectTo: Linking.createURL("/confirm"),
+              emailRedirectTo: "taskdash://confirm",
               data: {
                 full_name: input.name.trim()
               }
@@ -879,9 +890,13 @@ export const useAppStore = create<AppState>()(
 
             return true;
           } catch (syncError) {
+            console.error("TaskDash signup failed after auth", syncError);
             set({
               status: "error",
-              error: syncError instanceof Error ? syncError.message : "Unable to load account"
+              error:
+                syncError instanceof Error
+                  ? `Unable to load account: ${syncError.message}`
+                  : "Unable to load account"
             });
             return false;
           }
@@ -1013,31 +1028,15 @@ export const useAppStore = create<AppState>()(
           }
         }));
 
-        const matchingTaskers = accounts
-          .filter((account) => account.id !== currentAccount.id)
-          .filter((account) => account.serviceZipCodes.includes(task.zipCode));
-
-        const seededConversation = matchingTaskers[0]
-          ? {
-              id: `conv-${Date.now()}`,
-              taskId: task.id,
-              participantIds: [currentAccount.id, matchingTaskers[0].id],
-              messages: [
-                {
-                  id: `msg-${Date.now()}-intro`,
-                  senderId: matchingTaskers[0].id,
-                  text: `I cover ZIP ${task.zipCode} and can help with "${task.title}". What time works best for you?`,
-                  sentAt: nowLabel(),
-                  kind: "question" as const
-                }
-              ]
-            }
-          : null;
-
         const allTasks = [task, ...get().allTasks];
-        const allConversations = seededConversation
-          ? [seededConversation, ...get().allConversations]
-          : get().allConversations;
+        const publicConversation: Conversation = {
+          id: `conv-${Date.now()}-public`,
+          taskId: task.id,
+          threadType: "public",
+          participantIds: [currentAccount.id],
+          messages: [systemMessage("Public job thread opened.")]
+        };
+        const allConversations = [publicConversation, ...get().allConversations];
 
         const derived = buildDerivedState(
           accounts,
@@ -1046,7 +1045,7 @@ export const useAppStore = create<AppState>()(
           allTasks,
           allConversations,
           get().allReviews,
-          seededConversation?.id ?? get().selectedConversationId
+          publicConversation.id
         );
 
         set({
@@ -1059,10 +1058,88 @@ export const useAppStore = create<AppState>()(
 
         return task.id;
       },
+      openPublicConversationForTask: async (taskId) => {
+        if (hasSupabaseEnv()) {
+          try {
+            const result = await openConversationInSupabase(taskId, "public");
+            set({
+              ...applyMarketplacePayload(result.marketplace, get().activeRole, result.conversationId),
+              status: "success",
+              error: null
+            });
+            return result.conversationId;
+          } catch (error) {
+            set({
+              status: "error",
+              error: error instanceof Error ? error.message : "Unable to open public thread"
+            });
+            return null;
+          }
+        }
+
+        const state = get();
+        const currentAccount = state.currentAccount;
+        const task = state.allTasks.find((item) => item.id === taskId);
+
+        if (!currentAccount || !task) {
+          set({ error: "Task not found." });
+          return null;
+        }
+
+        const existing = state.allConversations.find(
+          (conversation) => conversation.taskId === taskId && (conversation.threadType ?? "private") === "public"
+        );
+
+        if (existing) {
+          const allConversations = state.allConversations.map((conversation) =>
+            conversation.id === existing.id && !conversation.participantIds.includes(currentAccount.id)
+              ? { ...conversation, participantIds: [...conversation.participantIds, currentAccount.id] }
+              : conversation
+          );
+          const derived = buildDerivedState(
+            state.accounts,
+            currentAccount.id,
+            state.activeRole,
+            state.allTasks,
+            allConversations,
+            state.allReviews,
+            existing.id
+          );
+          set({ allConversations, ...derived, error: null });
+          return existing.id;
+        }
+
+        const conversation: Conversation = {
+          id: `conv-${Date.now()}-public`,
+          taskId,
+          threadType: "public",
+          participantIds: [task.postedBy, currentAccount.id],
+          messages: [systemMessage("Public job thread opened.")]
+        };
+
+        const allConversations = [conversation, ...state.allConversations];
+        const derived = buildDerivedState(
+          state.accounts,
+          currentAccount.id,
+          state.activeRole,
+          state.allTasks,
+          allConversations,
+          state.allReviews,
+          conversation.id
+        );
+
+        set({
+          allConversations,
+          ...derived,
+          error: null
+        });
+
+        return conversation.id;
+      },
       openConversationForTask: async (taskId) => {
         if (hasSupabaseEnv()) {
           try {
-            const result = await openConversationInSupabase(taskId);
+            const result = await openConversationInSupabase(taskId, "private");
             set({
               ...applyMarketplacePayload(
                 result.marketplace,
@@ -1105,7 +1182,9 @@ export const useAppStore = create<AppState>()(
 
         const existing = state.allConversations.find(
           (conversation) =>
-            conversation.taskId === taskId && conversation.participantIds.includes(currentAccount.id)
+            conversation.taskId === taskId &&
+            (conversation.threadType ?? "private") === "private" &&
+            conversation.participantIds.includes(currentAccount.id)
         );
 
         if (existing) {
@@ -1113,23 +1192,16 @@ export const useAppStore = create<AppState>()(
           return existing.id;
         }
 
-        const counterpartId =
-          task.postedBy === currentAccount.id
-            ? state.accounts.find(
-                (account) =>
-                  account.id !== currentAccount.id && account.serviceZipCodes.includes(task.zipCode)
-              )?.id
-            : task.postedBy;
-
-        if (!counterpartId) {
-          set({ error: "No tasker currently covers that ZIP code." });
+        if (task.postedBy === currentAccount.id) {
+          set({ error: "No tasker has opened a private thread for this job yet." });
           return null;
         }
 
         const conversation: Conversation = {
           id: `conv-${Date.now()}`,
           taskId,
-          participantIds: [currentAccount.id, counterpartId],
+          threadType: "private",
+          participantIds: [currentAccount.id, task.postedBy],
           messages: [systemMessage("Conversation opened.")]
         };
 

@@ -3,6 +3,7 @@ import { hasSupabaseEnv, supabase } from "@/lib/supabase";
 import {
   Category,
   Conversation,
+  ConversationType,
   CurrentAccount,
   MarketplacePayload,
   MarketplaceUser,
@@ -54,6 +55,8 @@ type TaskTagRow = {
 type ConversationRow = {
   id: string;
   task_id: string;
+  thread_type: ConversationType | null;
+  tasker_id: string | null;
 };
 
 type ConversationParticipantRow = {
@@ -222,6 +225,8 @@ function buildConversations(
   return conversations.map<Conversation>((conversation) => ({
     id: conversation.id,
     taskId: conversation.task_id,
+    threadType: conversation.thread_type ?? "private",
+    taskerId: conversation.tasker_id ?? undefined,
     participantIds: participantsMap.get(conversation.id) ?? [],
     messages: messagesMap.get(conversation.id) ?? []
   }));
@@ -241,7 +246,11 @@ function buildTasks(
   for (const conversation of conversations) {
     const offerCount = conversation.messages.filter((message) => message.kind === "offer").length;
     const questionCount = conversation.messages.filter((message) => message.kind === "question").length;
-    counts.set(conversation.taskId, { offers: offerCount, questions: questionCount });
+    const existing = counts.get(conversation.taskId) ?? { offers: 0, questions: 0 };
+    counts.set(conversation.taskId, {
+      offers: existing.offers + ((conversation.threadType ?? "private") === "private" ? offerCount : 0),
+      questions: existing.questions + questionCount
+    });
   }
 
   return tasks.map<Task>((task) => ({
@@ -301,7 +310,7 @@ async function loadBaseRows() {
     supabase.from("categories").select("id, label, icon, accent").order("label"),
     supabase.from("tasks").select("*").order("posted_at", { ascending: false }),
     supabase.from("task_tags").select("task_id, label"),
-    supabase.from("conversations").select("id, task_id").order("created_at", { ascending: false }),
+    supabase.from("conversations").select("id, task_id, thread_type, tasker_id").order("created_at", { ascending: false }),
     supabase.from("conversation_participants").select("conversation_id, profile_id"),
     supabase.from("messages").select("id, conversation_id, sender_id, body, kind, offer_amount, sent_at").order("sent_at"),
     supabase.from("reviews").select("id, task_id, reviewer_id, reviewee_id, role, rating, body, created_at").order("created_at", { ascending: false })
@@ -376,22 +385,16 @@ export async function fetchMarketplaceFromSupabase(): Promise<MarketplacePayload
   };
 }
 
-async function findMatchingTasker(taskZipCode: string, excludeProfileId: string) {
-  const { data, error } = await supabase
-    .from("tasker_service_areas")
-    .select("profile_id")
-    .eq("zip_code", taskZipCode);
-
-  if (error) throw error;
-
-  return (data ?? []).map((item) => item.profile_id).find((id) => id !== excludeProfileId) ?? null;
-}
-
-async function createConversationForTask(taskId: string, participantIds: string[]) {
+async function createConversationForTask(
+  taskId: string,
+  participantIds: string[],
+  threadType: ConversationType,
+  taskerId?: string | null
+) {
   const { data: conversation, error: conversationError } = await supabase
     .from("conversations")
-    .insert({ task_id: taskId })
-    .select("id, task_id")
+    .insert({ task_id: taskId, thread_type: threadType, tasker_id: taskerId ?? null })
+    .select("id, task_id, thread_type, tasker_id")
     .single();
 
   if (conversationError) throw conversationError;
@@ -407,6 +410,25 @@ async function createConversationForTask(taskId: string, participantIds: string[
   if (participantsError) throw participantsError;
 
   return conversation.id;
+}
+
+async function ensureConversationParticipant(conversationId: string, profileId: string) {
+  const { data, error } = await supabase
+    .from("conversation_participants")
+    .select("id")
+    .eq("conversation_id", conversationId)
+    .eq("profile_id", profileId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (data) return;
+
+  const { error: insertError } = await supabase.from("conversation_participants").insert({
+    conversation_id: conversationId,
+    profile_id: profileId
+  });
+
+  if (insertError) throw insertError;
 }
 
 export async function createTaskInSupabase(input: {
@@ -449,46 +471,21 @@ export async function createTaskInSupabase(input: {
     if (tagsError) throw tagsError;
   }
 
-  const matchingTaskerId = await findMatchingTasker(input.zipCode, authData.user.id);
-  let conversationId: string | null = null;
-
-  if (matchingTaskerId) {
-    conversationId = await createConversationForTask(task.id, [authData.user.id, matchingTaskerId]);
-    await supabase.from("messages").insert({
-      conversation_id: conversationId,
-      sender_id: matchingTaskerId,
-      kind: "question",
-      body: `I cover ZIP ${input.zipCode} and can help with "${input.title}". What time works best for you?`
-    });
-  }
+  await createConversationForTask(task.id, [authData.user.id], "public", null);
 
   return {
     taskId: task.id,
-    conversationId,
+    conversationId: null,
     marketplace: await fetchMarketplaceFromSupabase()
   };
 }
 
-export async function openConversationInSupabase(taskId: string) {
+export async function openConversationInSupabase(taskId: string, threadType: ConversationType = "private") {
   ensureSupabase();
 
   const { data: authData, error: authError } = await supabase.auth.getUser();
   if (authError) throw authError;
   if (!authData.user) throw new Error("Not authenticated");
-
-  const { data: existingConversation, error: existingError } = await supabase
-    .from("conversations")
-    .select("id, task_id")
-    .eq("task_id", taskId)
-    .maybeSingle();
-
-  if (existingError) throw existingError;
-  if (existingConversation) {
-    return {
-      conversationId: existingConversation.id,
-      marketplace: await fetchMarketplaceFromSupabase()
-    };
-  }
 
   const { data: task, error: taskError } = await supabase
     .from("tasks")
@@ -499,14 +496,73 @@ export async function openConversationInSupabase(taskId: string) {
   if (taskError) throw taskError;
 
   const myId = authData.user.id;
-  const counterpartId =
-    task.posted_by === myId ? await findMatchingTasker(task.zip_code, myId) : task.posted_by;
 
-  if (!counterpartId) {
-    throw new Error("No available user found for this task");
+  if (threadType === "public") {
+    const { data: publicConversation, error: publicConversationError } = await supabase
+      .from("conversations")
+      .select("id, task_id, thread_type, tasker_id")
+      .eq("task_id", taskId)
+      .eq("thread_type", "public")
+      .maybeSingle();
+
+    if (publicConversationError) throw publicConversationError;
+    if (publicConversation) {
+      await ensureConversationParticipant(publicConversation.id, myId);
+      return {
+        conversationId: publicConversation.id,
+        marketplace: await fetchMarketplaceFromSupabase()
+      };
+    }
+
+    const conversationId = await createConversationForTask(taskId, [task.posted_by, myId], "public", null);
+    await ensureConversationParticipant(conversationId, myId);
+    return {
+      conversationId,
+      marketplace: await fetchMarketplaceFromSupabase()
+    };
   }
 
-  const conversationId = await createConversationForTask(taskId, [myId, counterpartId]);
+  if (task.posted_by === myId) {
+    const { data: posterConversation, error: posterConversationError } = await supabase
+      .from("conversations")
+      .select("id, task_id, thread_type, tasker_id")
+      .eq("task_id", taskId)
+      .eq("thread_type", "private")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (posterConversationError) throw posterConversationError;
+    if (!posterConversation) {
+      throw new Error("No tasker has opened a private thread for this job yet.");
+    }
+
+    await ensureConversationParticipant(posterConversation.id, myId);
+    return {
+      conversationId: posterConversation.id,
+      marketplace: await fetchMarketplaceFromSupabase()
+    };
+  }
+
+  const { data: existingConversation, error: existingError } = await supabase
+    .from("conversations")
+    .select("id, task_id, thread_type, tasker_id")
+    .eq("task_id", taskId)
+    .eq("thread_type", "private")
+    .eq("tasker_id", myId)
+    .maybeSingle();
+
+  if (existingError) throw existingError;
+  if (existingConversation) {
+    await ensureConversationParticipant(existingConversation.id, myId);
+    await ensureConversationParticipant(existingConversation.id, task.posted_by);
+    return {
+      conversationId: existingConversation.id,
+      marketplace: await fetchMarketplaceFromSupabase()
+    };
+  }
+
+  const conversationId = await createConversationForTask(taskId, [myId, task.posted_by], "private", myId);
 
   return {
     conversationId,
@@ -523,6 +579,8 @@ export async function sendMessageInSupabase(
   const { data: authData, error: authError } = await supabase.auth.getUser();
   if (authError) throw authError;
   if (!authData.user) throw new Error("Not authenticated");
+
+  await ensureConversationParticipant(conversationId, authData.user.id);
 
   const { error } = await supabase.from("messages").insert({
     conversation_id: conversationId,
