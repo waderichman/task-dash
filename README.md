@@ -1,6 +1,6 @@
-# TaskDash
+# Workzy
 
-TaskDash is a local task marketplace app built with Expo and React Native.
+Workzy is a local task marketplace app built with Expo and React Native.
 
 People posting work can create a job, answer public questions, and review private offers from nearby taskers. Taskers can discover jobs in the ZIP codes they cover, join the public thread for a job, and open a private chat when they want to negotiate price or details.
 
@@ -31,4 +31,4 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 ## Notes
 
 - The SQL schema lives in `supabase/schema.sql`.
-- Email confirmation redirects should include `taskdash://confirm`.
+- Email confirmation redirects should include `workzy://confirm`.

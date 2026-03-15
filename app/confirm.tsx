@@ -18,7 +18,7 @@ export default function ConfirmScreen() {
           Email Confirmed
         </Text>
         <Text className="mt-3 text-3xl font-black leading-9 text-[#08101c]">
-          Your TaskDash account is verified.
+          Your Workzy account is verified.
         </Text>
         <Text className="mt-3 text-sm leading-6 text-[#5b6779]">
           Head back to sign in with the email and password you just created.

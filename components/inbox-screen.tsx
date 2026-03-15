@@ -6,6 +6,22 @@ import { useNavigation } from "@react-navigation/native";
 import { Screen } from "@/components/screen";
 import { useAppStore } from "@/store/use-app-store";
 
+function formatTaskStage(value: string) {
+  if (value === "open") {
+    return "Booking Needed";
+  }
+
+  if (["assigned", "in_progress", "completion_requested"].includes(value)) {
+    return "Booked";
+  }
+
+  if (value === "released") {
+    return "Released";
+  }
+
+  return "Completed";
+}
+
 export function InboxScreen() {
   const router = useRouter();
   const navigation = useNavigation();
@@ -19,7 +35,9 @@ export function InboxScreen() {
   const selectConversation = useAppStore((state) => state.selectConversation);
   const sendMessage = useAppStore((state) => state.sendMessage);
   const acceptLatestOffer = useAppStore((state) => state.acceptLatestOffer);
+  const requestTaskCompletion = useAppStore((state) => state.requestTaskCompletion);
   const completeTask = useAppStore((state) => state.completeTask);
+  const releaseFunds = useAppStore((state) => state.releaseFunds);
   const leaveReview = useAppStore((state) => state.leaveReview);
   const refreshMarketplace = useAppStore((state) => state.refreshMarketplace);
   const error = useAppStore((state) => state.error);
@@ -70,6 +88,23 @@ export function InboxScreen() {
     ? tasks.find((task) => task.id === pendingThreadTarget.taskId)
     : null;
   const isOpeningPendingThread = Boolean(pendingThreadTarget && !pendingConversation);
+  const canAcceptOffer =
+    Boolean(selectedConversation && latestOffer?.offerAmount) &&
+    selectedTask?.postedBy === currentAccount?.id &&
+    selectedTask?.status === "open";
+  const canRequestCompletion =
+    Boolean(selectedTask) &&
+    selectedTask?.assignedTo === currentAccount?.id &&
+    ["assigned", "in_progress"].includes(selectedTask?.status ?? "");
+  const canConfirmCompletion =
+    Boolean(selectedTask) &&
+    selectedTask?.postedBy === currentAccount?.id &&
+    ["assigned", "in_progress", "completion_requested"].includes(selectedTask?.status ?? "");
+  const canReleaseFunds =
+    Boolean(selectedTask) &&
+    selectedTask?.postedBy === currentAccount?.id &&
+    selectedTask?.status === "completed";
+  const canSendOffers = selectedTask?.status === "open";
 
   const threadRows = useMemo(
     () =>
@@ -108,7 +143,7 @@ export function InboxScreen() {
 
     return {
       canReviewTasker:
-        selectedTask.status === "completed" &&
+        ["completed", "released"].includes(selectedTask.status) &&
         selectedTask.postedBy === myId &&
         !reviews.some(
           (review) =>
@@ -118,7 +153,7 @@ export function InboxScreen() {
             review.role === "tasker"
         ),
       canReviewPoster:
-        selectedTask.status === "completed" &&
+        ["completed", "released"].includes(selectedTask.status) &&
         selectedTask.assignedTo === myId &&
         !reviews.some(
           (review) =>
@@ -212,7 +247,7 @@ export function InboxScreen() {
                 {item.preview}
               </Text>
               <View className="mt-4 flex-row items-center justify-between">
-                <ThreadBadge text={item.status} />
+                <ThreadBadge text={formatTaskStage(item.status)} />
                 {item.amount ? <Text className="text-sm font-bold text-[#214a35]">${item.amount}</Text> : null}
               </View>
             </Pressable>
@@ -271,7 +306,40 @@ export function InboxScreen() {
             <InlinePill icon="location-outline" text={selectedTask.location} dark />
             <InlinePill icon="navigate-outline" text={selectedTask.zipCode} dark />
             <InlinePill icon="cash-outline" text={`$${selectedTask.agreedPrice ?? selectedTask.budget}`} dark />
-            <InlinePill icon="layers-outline" text={selectedTask.status} dark />
+            <InlinePill icon="layers-outline" text={formatTaskStage(selectedTask.status)} dark />
+          </View>
+        ) : null}
+
+        {!isOpeningPendingThread && selectedTask ? (
+          <View className="mt-4 rounded-[22px] bg-white/10 px-4 py-4">
+            <Text className="text-xs font-semibold uppercase tracking-[1.5px] text-[#9cb4a4]">Job status</Text>
+            <Text className="mt-2 text-sm leading-6 text-[#d9e4d7]">
+              {selectedTask.status === "open"
+                ? "This job is live and still needs a booking."
+                : ["assigned", "in_progress"].includes(selectedTask.status)
+                  ? currentAccount?.id === selectedTask.assignedTo
+                    ? "You are booked on this job. When the work is done, request completion so the poster can confirm it."
+                    : "The job is in progress. The tasker can request completion when the work is finished."
+                  : selectedTask.status === "completion_requested"
+                    ? currentAccount?.id === selectedTask.postedBy
+                      ? "The tasker asked to wrap this up. Confirm completion when you are happy with the work."
+                      : "Completion has been requested. The poster still needs to confirm the job."
+                    : selectedTask.status === "completed"
+                      ? currentAccount?.id === selectedTask.postedBy
+                        ? "The job is completed. Release the funds when you are ready, and it will move into history."
+                        : "The job is completed. The poster still needs to release the funds."
+                      : "The job has been released and moved into history."}
+            </Text>
+            {selectedTask.agreedPrice ? (
+              <View className="mt-4 rounded-[18px] bg-white/10 px-4 py-4">
+                <Text className="text-xs font-semibold uppercase tracking-[1.5px] text-[#9cb4a4]">Payout breakdown</Text>
+                <Text className="mt-2 text-sm leading-6 text-[#d9e4d7]">
+                  Poster pays ${selectedTask.agreedPrice}. Workzy keeps ${selectedTask.platformFeeAmount} (
+                  {Math.round(selectedTask.platformFeeRate * 100)}%), and the tasker receives ${selectedTask.taskerPayoutAmount}
+                  once funds are released.
+                </Text>
+              </View>
+            ) : null}
           </View>
         ) : null}
 
@@ -284,15 +352,40 @@ export function InboxScreen() {
                   setDraft("Can you confirm the access details?");
                 }}
               />
-              <QuickAction label="Offer $140" onPress={() => submitOffer(140)} />
-              <QuickAction label="Offer $160" onPress={() => submitOffer(160)} />
+              <QuickAction label="Offer $140" onPress={() => submitOffer(140)} disabled={!canSendOffers} />
+              <QuickAction label="Offer $160" onPress={() => submitOffer(160)} disabled={!canSendOffers} />
             </View>
             <View className="flex-row gap-3">
               <QuickAction
                 label={latestOffer?.offerAmount ? `Accept $${latestOffer.offerAmount}` : "Accept latest offer"}
                 onPress={() => void (selectedConversation && acceptLatestOffer(selectedConversation.id))}
+                disabled={!canAcceptOffer}
               />
-              <QuickAction label="Mark complete" onPress={() => void (selectedTask && completeTask(selectedTask.id))} />
+              <QuickAction
+                label={
+                  canRequestCompletion
+                    ? "Request completion"
+                    : canConfirmCompletion
+                      ? "Confirm completion"
+                      : canReleaseFunds
+                        ? "Release funds"
+                      : selectedTask?.status === "completed"
+                        ? "Completed"
+                        : selectedTask?.status === "released"
+                          ? "Released"
+                        : "Completion steps"
+                }
+                onPress={() => {
+                  if (selectedTask && canRequestCompletion) {
+                    void requestTaskCompletion(selectedTask.id);
+                  } else if (selectedTask && canConfirmCompletion) {
+                    void completeTask(selectedTask.id);
+                  } else if (selectedTask && canReleaseFunds) {
+                    void releaseFunds(selectedTask.id);
+                  }
+                }}
+                disabled={!canRequestCompletion && !canConfirmCompletion && !canReleaseFunds}
+              />
             </View>
           </View>
         ) : null}
@@ -403,10 +496,21 @@ export function InboxScreen() {
   );
 }
 
-function QuickAction({ label, onPress }: { label: string; onPress: () => void }) {
+function QuickAction({
+  label,
+  onPress,
+  disabled = false
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
   return (
-    <Pressable onPress={onPress} className="flex-1 rounded-full bg-white/10 px-4 py-3">
-      <Text className="text-center text-sm font-semibold text-white">{label}</Text>
+    <Pressable
+      onPress={disabled ? undefined : onPress}
+      className={`flex-1 rounded-full px-4 py-3 ${disabled ? "bg-white/5" : "bg-white/10"}`}
+    >
+      <Text className={`text-center text-sm font-semibold ${disabled ? "text-white/45" : "text-white"}`}>{label}</Text>
     </Pressable>
   );
 }

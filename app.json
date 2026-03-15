@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "TaskDash",
+    "name": "Workzy",
     "owner": "waderichman",
     "slug": "taskdash",
-    "scheme": "taskdash",
+    "scheme": "workzy",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -13,14 +13,14 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.irene.taskdash",
+      "bundleIdentifier": "com.workzy.mobile",
       "infoPlist": {
-        "NSUserNotificationsUsageDescription": "TaskDash uses notifications for task updates, chat messages, and booking activity.",
+        "NSUserNotificationsUsageDescription": "Workzy uses notifications for task updates, chat messages, and booking activity.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.irene.taskdash"
+      "package": "com.workzy.mobile"
     },
     "plugins": [
       "expo-router",

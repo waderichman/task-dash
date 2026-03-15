@@ -9,7 +9,7 @@ export default function Index() {
   if (!hasBootstrapped) {
     return (
       <View className="flex-1 items-center justify-center bg-[#f6f3ed] px-6">
-        <Text className="text-3xl font-black text-[#08101c]">TaskDash</Text>
+        <Text className="text-3xl font-black text-[#08101c]">Workzy</Text>
         <Text className="mt-3 text-center text-sm leading-6 text-[#5b6779]">
           Loading your marketplace workspace...
         </Text>

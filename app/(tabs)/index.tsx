@@ -7,6 +7,22 @@ import { Screen } from "@/components/screen";
 import { CurrentAccount, MarketplaceUser, Task, UserRole } from "@/lib/types";
 import { useAppStore } from "@/store/use-app-store";
 
+function formatTaskStage(value: string) {
+  if (value === "open") {
+    return "Booking Needed";
+  }
+
+  if (["assigned", "in_progress", "completion_requested"].includes(value)) {
+    return "Booked";
+  }
+
+  if (value === "released") {
+    return "Released";
+  }
+
+  return "Completed";
+}
+
 const roleCopy: Record<
   UserRole,
   { title: string; subtitle: string; primaryCta: string; secondaryCta: string }
@@ -39,6 +55,7 @@ export default function DiscoverScreen() {
   const refreshMarketplace = useAppStore((state) => state.refreshMarketplace);
   const status = useAppStore((state) => state.status);
   const beginThreadOpen = useAppStore((state) => state.beginThreadOpen);
+  const deleteTask = useAppStore((state) => state.deleteTask);
   const openConversationForTask = useAppStore((state) => state.openConversationForTask);
 
   const copy = roleCopy[activeRole];
@@ -47,7 +64,7 @@ export default function DiscoverScreen() {
     () => tasks.filter((task) => task.postedBy === currentAccount?.id),
     [currentAccount?.id, tasks]
   );
-  const openManagedTasks = managedTasks.filter((task) => task.status !== "completed");
+  const openManagedTasks = managedTasks.filter((task) => task.status !== "released");
   const openNearbyTasks = tasks.filter((task) => task.status === "open");
   const visibleTasks = activeRole === "poster" ? openManagedTasks : openNearbyTasks;
 
@@ -70,7 +87,7 @@ export default function DiscoverScreen() {
         className="rounded-[32px] border border-[#e6ded0] px-5 pb-6 pt-6"
       >
         <Text className="text-xs font-semibold uppercase tracking-[2px] text-[#56705e]">
-          TaskDash
+          Workzy
         </Text>
         <Text className="mt-3 text-[34px] font-black leading-[40px] text-[#08101c]">
           {copy.title}
@@ -152,6 +169,7 @@ export default function DiscoverScreen() {
             isPosterView={activeRole === "poster"}
             onOpenThread={() => handleOpenTask(item.id)}
             onOpenPublicThread={() => handleOpenPublicThread(item.id)}
+            onDeleteTask={() => void deleteTask(item.id)}
           />
         )}
         ListEmptyComponent={
@@ -168,9 +186,9 @@ export default function DiscoverScreen() {
 
       {activeRole === "poster" && managedTasks.length > 0 ? (
         <>
-          <SectionHeader title="Completed jobs" detail="Wrapped and ready for reviews" />
+          <SectionHeader title="History" detail="Released jobs that are fully wrapped" />
           <FlatList
-            data={managedTasks.filter((task) => task.status === "completed")}
+            data={managedTasks.filter((task) => task.status === "released")}
             keyExtractor={(item) => `${item.id}-complete`}
             scrollEnabled={false}
             ItemSeparatorComponent={() => <View className="h-4" />}
@@ -182,6 +200,7 @@ export default function DiscoverScreen() {
                 isPosterView
                 onOpenThread={() => handleOpenTask(item.id)}
                 onOpenPublicThread={() => handleOpenPublicThread(item.id)}
+                onDeleteTask={() => void deleteTask(item.id)}
               />
             )}
             ListEmptyComponent={<EmptyState title="No completed jobs yet" body="Completed work will land here." />}
@@ -277,7 +296,8 @@ function TaskCard({
   tasker,
   isPosterView,
   onOpenThread,
-  onOpenPublicThread
+  onOpenPublicThread,
+  onDeleteTask
 }: {
   task: Task;
   poster?: CurrentAccount | MarketplaceUser;
@@ -285,6 +305,7 @@ function TaskCard({
   isPosterView: boolean;
   onOpenThread: () => void;
   onOpenPublicThread: () => void;
+  onDeleteTask: () => void;
 }) {
   const posterRating =
     poster && "posterStats" in poster ? poster.posterStats.rating : poster?.posterRating;
@@ -309,7 +330,7 @@ function TaskCard({
         <Pill icon="location-outline" text={task.location} />
         <Pill icon="navigate-outline" text={task.zipCode} />
         <Pill icon="time-outline" text={task.timeline} />
-        <Pill icon="layers-outline" text={task.status} />
+        <Pill icon="layers-outline" text={formatTaskStage(task.status)} />
       </View>
 
       <View className="mt-4 rounded-[22px] bg-[#faf7f2] px-4 py-4">
@@ -343,6 +364,30 @@ function TaskCard({
         </View>
       ) : null}
 
+      {(task.status === "assigned" ||
+        task.status === "in_progress" ||
+        task.status === "completion_requested" ||
+        task.status === "completed") && (
+        <View className="mt-4 rounded-[22px] bg-[#f4fbf2] px-4 py-4">
+          <Text className="text-xs font-semibold uppercase tracking-[1.5px] text-[#56705e]">
+            Job flow
+          </Text>
+          <Text className="mt-2 text-sm leading-6 text-[#4f5d70]">
+            {task.status === "completion_requested"
+              ? "Completion was requested. The poster still needs to confirm the job."
+              : task.status === "completed"
+                ? "The work is completed. Once the poster releases the funds, this job moves into history."
+                : "This job is booked and underway."}
+          </Text>
+          {task.agreedPrice ? (
+            <Text className="mt-3 text-sm leading-6 text-[#4f5d70]">
+              ${task.agreedPrice} total. Workzy keeps ${task.platformFeeAmount}, and the tasker receives ${task.taskerPayoutAmount}
+              after release.
+            </Text>
+          ) : null}
+        </View>
+      )}
+
       {task.tags.length > 0 ? (
         <View className="mt-5 flex-row flex-wrap gap-2">
           {task.tags.map((tag) => (
@@ -363,10 +408,20 @@ function TaskCard({
           </Pressable>
           <Pressable onPress={onOpenThread} className="flex-1 rounded-full bg-[#08101c] px-4 py-3">
             <Text className="text-center text-sm font-bold text-white">
-              {task.status === "completed" ? "Open inbox chat" : isPosterView ? "Open inbox chats" : "Message poster"}
+              {task.status === "released" ? "Open history chat" : isPosterView ? "Open inbox chats" : "Message poster"}
             </Text>
           </Pressable>
         </View>
+        {isPosterView && task.status === "open" ? (
+          <Pressable onPress={onDeleteTask} className="mt-3 rounded-full border border-[#ead5d5] bg-[#fff7f7] px-4 py-3">
+            <Text className="text-center text-sm font-bold text-[#8b3b3b]">Delete job</Text>
+          </Pressable>
+        ) : null}
+        {isPosterView && (task.status === "assigned" || task.status === "in_progress" || task.status === "completion_requested") ? (
+          <Text className="mt-3 text-sm leading-6 text-[#7d8898]">
+            This job is already underway. Use Inbox to coordinate with the tasker instead of deleting it.
+          </Text>
+        ) : null}
       </View>
     </View>
   );

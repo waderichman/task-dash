@@ -20,13 +20,18 @@ export type MarketplaceUser = {
   serviceZipCodes: string[];
 };
 
-export type TaskStatus = "open" | "assigned" | "completed";
+export type TaskStatus =
+  | "open"
+  | "assigned"
+  | "in_progress"
+  | "completion_requested"
+  | "completed"
+  | "released";
 
 export type Task = {
   id: string;
   title: string;
   description: string;
-  categoryId: string;
   location: string;
   zipCode: string;
   distanceLabel: string;
@@ -37,6 +42,11 @@ export type Task = {
   postedBy: string;
   assignedTo?: string;
   agreedPrice?: number;
+  platformFeeRate: number;
+  platformFeeAmount: number;
+  taskerPayoutAmount: number;
+  completionRequestedAt?: string;
+  completedAt?: string;
   offers: number;
   questions: number;
   tags: string[];

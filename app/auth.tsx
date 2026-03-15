@@ -30,7 +30,7 @@ export default function AuthScreen() {
     return (
       <Screen>
         <View className="rounded-[28px] border border-[#e8e1d5] bg-white px-5 py-10">
-          <Text className="text-center text-2xl font-black text-[#08101c]">TaskDash</Text>
+          <Text className="text-center text-2xl font-black text-[#08101c]">Workzy</Text>
           <Text className="mt-3 text-center text-sm leading-6 text-[#5b6779]">
             Restoring your session...
           </Text>
@@ -75,10 +75,10 @@ export default function AuthScreen() {
         className="rounded-[32px] border border-[#e6ded0] px-5 pb-6 pt-6"
       >
         <Text className="text-xs font-semibold uppercase tracking-[2px] text-[#56705e]">
-          TaskDash Auth
+          Workzy Auth
         </Text>
         <Text className="mt-3 text-[34px] font-black leading-[40px] text-[#08101c]">
-          {mode === "login" ? "Sign in to your local marketplace" : "Create your TaskDash account"}
+          {mode === "login" ? "Sign in to your local marketplace" : "Create your Workzy account"}
         </Text>
         <Text className="mt-3 text-sm leading-6 text-[#4f5d70]">
           Posters post jobs by ZIP code. Taskers can cover nearby ZIPs automatically with a travel radius.
@@ -142,7 +142,7 @@ export default function AuthScreen() {
           label="Email"
           value={email}
           onChangeText={setEmail}
-          placeholder={mode === "login" ? "you@example.com" : "name@taskdash.app"}
+          placeholder={mode === "login" ? "you@example.com" : "name@workzy.app"}
           keyboardType="email-address"
           autoCapitalize="none"
         />

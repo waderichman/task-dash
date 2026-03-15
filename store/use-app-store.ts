@@ -6,9 +6,12 @@ import {
   acceptLatestOfferInSupabase,
   completeTaskInSupabase,
   createTaskInSupabase,
+  deleteTaskInSupabase,
   fetchMarketplace,
   leaveReviewInSupabase,
   openConversationInSupabase,
+  releaseFundsInSupabase,
+  requestTaskCompletionInSupabase,
   sendMessageInSupabase
 } from "@/lib/marketplace-service";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase";
@@ -28,7 +31,6 @@ import {
 type CreateTaskInput = {
   title: string;
   description: string;
-  categoryId: string;
   location: string;
   zipCode: string;
   budget: number;
@@ -107,6 +109,7 @@ type AppState = {
   logout: () => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<boolean>;
   createTask: (input: CreateTaskInput) => Promise<string | null>;
+  deleteTask: (taskId: string) => Promise<void>;
   openPublicConversationForTask: (taskId: string) => Promise<string | null>;
   openConversationForTask: (taskId: string) => Promise<string | null>;
   sendMessage: (
@@ -115,7 +118,9 @@ type AppState = {
     options?: { kind?: MessageKind; offerAmount?: number }
   ) => Promise<void>;
   acceptLatestOffer: (conversationId: string) => Promise<void>;
+  requestTaskCompletion: (taskId: string) => Promise<void>;
   completeTask: (taskId: string) => Promise<void>;
+  releaseFunds: (taskId: string) => Promise<void>;
   leaveReview: (
     taskId: string,
     revieweeId: string,
@@ -183,7 +188,7 @@ function toStoredAccount(profile: SupabaseProfileRow, serviceZipCodes: string[])
     zipCode: profile.zip_code,
     serviceZipCodes: normalizeZipCodes([profile.zip_code, ...serviceZipCodes]),
     travelRadiusMiles: profile.travel_radius_miles ?? 10,
-    bio: profile.bio ?? "TaskDash member",
+    bio: profile.bio ?? "Workzy member",
     posterStats: {
       tasksPosted: 0,
       hireRate: "0%",
@@ -266,7 +271,7 @@ async function ensureSupabaseProfile(user: User, fallback?: PendingSignUp | null
       id: user.id,
       full_name: fallback.name.trim(),
       email: fallback.email.trim().toLowerCase(),
-      bio: fallback.bio.trim() || "New TaskDash member",
+      bio: fallback.bio.trim() || "New Workzy member",
       home_base: fallback.homeBase.trim() || `ZIP ${zipCode}`,
       zip_code: zipCode,
       travel_radius_miles: fallback.travelRadiusMiles,
@@ -426,7 +431,7 @@ export const useAppStore = create<AppState>()(
             error: null
           });
         } catch (syncError) {
-          console.error("TaskDash hydrateAuthSession failed", syncError);
+          console.error("Workzy hydrateAuthSession failed", syncError);
           set({
             ...createEmptyAuthState(),
             status: "error",
@@ -519,7 +524,7 @@ export const useAppStore = create<AppState>()(
 
           return true;
         } catch (syncError) {
-          console.error("TaskDash login failed after auth", syncError);
+          console.error("Workzy login failed after auth", syncError);
           set({
             status: "error",
             error:
@@ -556,7 +561,7 @@ export const useAppStore = create<AppState>()(
           email: normalizedEmail,
           password: input.password,
           options: {
-            emailRedirectTo: "taskdash://confirm",
+            emailRedirectTo: "workzy://confirm",
             data: {
               full_name: input.name.trim()
             }
@@ -588,7 +593,7 @@ export const useAppStore = create<AppState>()(
           id: data.user.id,
           full_name: input.name.trim(),
           email: normalizedEmail,
-          bio: input.bio.trim() || "New TaskDash member",
+          bio: input.bio.trim() || "New Workzy member",
           home_base: input.homeBase.trim() || `ZIP ${zipCode}`,
           zip_code: zipCode,
           travel_radius_miles: safeTravelRadius,
@@ -644,7 +649,7 @@ export const useAppStore = create<AppState>()(
 
           return true;
         } catch (syncError) {
-          console.error("TaskDash signup failed after auth", syncError);
+          console.error("Workzy signup failed after auth", syncError);
           set({
             status: "error",
             error:
@@ -703,7 +708,7 @@ export const useAppStore = create<AppState>()(
             home_base: input.homeBase.trim() || `ZIP ${zipCode}`,
             zip_code: zipCode,
             travel_radius_miles: safeTravelRadius,
-            bio: input.bio.trim() || "TaskDash member"
+            bio: input.bio.trim() || "Workzy member"
           })
           .eq("id", authData.user.id);
 
@@ -792,6 +797,22 @@ export const useAppStore = create<AppState>()(
             error: error instanceof Error ? error.message : "Unable to create task"
           });
           return null;
+        }
+      },
+      deleteTask: async (taskId) => {
+        try {
+          const payload = await deleteTaskInSupabase(taskId);
+          set({
+            ...applyMarketplacePayload(payload, get().activeRole, get().selectedConversationId),
+            status: "success",
+            error: null,
+            pendingThreadTarget: null
+          });
+        } catch (error) {
+          set({
+            status: "error",
+            error: error instanceof Error ? error.message : "Unable to remove job"
+          });
         }
       },
       openPublicConversationForTask: async (taskId) => {
@@ -891,6 +912,22 @@ export const useAppStore = create<AppState>()(
           });
         }
       },
+      requestTaskCompletion: async (taskId) => {
+        try {
+          const payload = await requestTaskCompletionInSupabase(taskId);
+          set({
+            ...applyMarketplacePayload(payload, get().activeRole, get().selectedConversationId),
+            status: "success",
+            error: null,
+            pendingThreadTarget: null
+          });
+        } catch (error) {
+          set({
+            status: "error",
+            error: error instanceof Error ? error.message : "Unable to request completion"
+          });
+        }
+      },
       completeTask: async (taskId) => {
         try {
           const payload = await completeTaskInSupabase(taskId);
@@ -904,6 +941,22 @@ export const useAppStore = create<AppState>()(
           set({
             status: "error",
             error: error instanceof Error ? error.message : "Unable to complete task"
+          });
+        }
+      },
+      releaseFunds: async (taskId) => {
+        try {
+          const payload = await releaseFundsInSupabase(taskId);
+          set({
+            ...applyMarketplacePayload(payload, get().activeRole, get().selectedConversationId),
+            status: "success",
+            error: null,
+            pendingThreadTarget: null
+          });
+        } catch (error) {
+          set({
+            status: "error",
+            error: error instanceof Error ? error.message : "Unable to release funds"
           });
         }
       },
@@ -931,11 +984,11 @@ export const useAppStore = create<AppState>()(
       }
     }),
     {
-      name: "taskdash-store",
-      version: 7,
+      name: "workzy-store",
+      version: 8,
       storage: createJSONStorage(() => AsyncStorage),
       migrate: (persistedState, version) => {
-        if (!persistedState || typeof persistedState !== "object" || version < 7) {
+        if (!persistedState || typeof persistedState !== "object" || version < 8) {
           return createInitialState();
         }
 

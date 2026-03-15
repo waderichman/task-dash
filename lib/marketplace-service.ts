@@ -34,15 +34,19 @@ type TaskRow = {
   id: string;
   posted_by: string;
   assigned_to: string | null;
-  category_id: string | null;
   title: string;
   description: string;
   location: string;
   zip_code: string;
   budget: number;
   agreed_price: number | null;
+  platform_fee_rate_basis_points: number | null;
+  platform_fee_amount: number | null;
+  tasker_payout_amount: number | null;
   timeline: string;
-  status: "open" | "assigned" | "completed";
+  status: "open" | "assigned" | "in_progress" | "completion_requested" | "completed" | "released";
+  completion_requested_at: string | null;
+  completed_at: string | null;
   posted_at: string;
 };
 
@@ -99,6 +103,20 @@ function ensureSupabase() {
   }
 }
 
+const DEFAULT_PLATFORM_FEE_RATE = 0.1;
+
+function computeFeeBreakdown(amount: number, basisPoints = 1000) {
+  const normalizedBasisPoints = Math.max(0, Math.min(10_000, Math.round(basisPoints)));
+  const platformFeeAmount = Math.round(amount * (normalizedBasisPoints / 10_000));
+
+  return {
+    platformFeeRate: normalizedBasisPoints / 10_000,
+    platformFeeAmount,
+    taskerPayoutAmount: Math.max(amount - platformFeeAmount, 0),
+    basisPoints: normalizedBasisPoints
+  };
+}
+
 function ratingSummary(reviews: ReviewRow[], revieweeId: string, role: RatingRole): RatingSummary {
   const relevant = reviews.filter((review) => review.reviewee_id === revieweeId && review.role === role);
 
@@ -132,13 +150,13 @@ function buildUsers(
     .map<MarketplaceUser>((profile) => {
       const tasksPosted = tasks.filter((task) => task.posted_by === profile.id).length;
       const jobsCompleted = tasks.filter(
-        (task) => task.assigned_to === profile.id && task.status === "completed"
+        (task) => task.assigned_to === profile.id && ["completed", "released"].includes(task.status)
       ).length;
 
       return {
         id: profile.id,
         name: profile.full_name,
-        tagline: profile.bio ?? "TaskDash member",
+        tagline: profile.bio ?? "Workzy member",
         taskerRating: ratingSummary(reviews, profile.id, "tasker"),
         posterRating: ratingSummary(reviews, profile.id, "poster"),
         jobsCompleted,
@@ -163,8 +181,8 @@ function buildCurrentAccount(
 ): CurrentAccount {
   const postedTasks = tasks.filter((task) => task.posted_by === currentProfile.id);
   const assignedTasks = tasks.filter((task) => task.assigned_to === currentProfile.id);
-  const completedPostedTasks = postedTasks.filter((task) => task.status === "completed");
-  const completedAssignedTasks = assignedTasks.filter((task) => task.status === "completed");
+  const completedPostedTasks = postedTasks.filter((task) => ["completed", "released"].includes(task.status));
+  const completedAssignedTasks = assignedTasks.filter((task) => ["completed", "released"].includes(task.status));
   const hireRate =
     postedTasks.length === 0
       ? "0%"
@@ -178,7 +196,7 @@ function buildCurrentAccount(
     zipCode: currentProfile.zip_code,
     serviceZipCodes: serviceAreaMap.get(currentProfile.id) ?? [currentProfile.zip_code],
     travelRadiusMiles: currentProfile.travel_radius_miles ?? 10,
-    bio: currentProfile.bio ?? "TaskDash member",
+    bio: currentProfile.bio ?? "Workzy member",
     posterStats: {
       tasksPosted: postedTasks.length,
       hireRate,
@@ -252,25 +270,37 @@ function buildTasks(
     });
   }
 
-  return tasks.map<Task>((task) => ({
-    id: task.id,
-    title: task.title,
-    description: task.description,
-    categoryId: task.category_id ?? "cleaning",
-    location: task.location,
-    zipCode: task.zip_code,
-    distanceLabel: `ZIP ${task.zip_code}`,
-    budget: task.budget,
-    timeline: task.timeline,
-    status: task.status,
-    postedAt: formatShortDate(task.posted_at),
-    postedBy: task.posted_by,
-    assignedTo: task.assigned_to ?? undefined,
-    agreedPrice: task.agreed_price ?? undefined,
-    offers: counts.get(task.id)?.offers ?? 0,
-    questions: counts.get(task.id)?.questions ?? 0,
-    tags: tagsMap.get(task.id) ?? []
-  }));
+  return tasks.map<Task>((task) => {
+    const pricingBase = task.agreed_price ?? task.budget;
+    const feeBreakdown = computeFeeBreakdown(
+      pricingBase,
+      task.platform_fee_rate_basis_points ?? Math.round(DEFAULT_PLATFORM_FEE_RATE * 10_000)
+    );
+
+    return {
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      location: task.location,
+      zipCode: task.zip_code,
+      distanceLabel: `ZIP ${task.zip_code}`,
+      budget: task.budget,
+      timeline: task.timeline,
+      status: task.status,
+      postedAt: formatShortDate(task.posted_at),
+      postedBy: task.posted_by,
+      assignedTo: task.assigned_to ?? undefined,
+      agreedPrice: task.agreed_price ?? undefined,
+      platformFeeRate: feeBreakdown.platformFeeRate,
+      platformFeeAmount: task.platform_fee_amount ?? feeBreakdown.platformFeeAmount,
+      taskerPayoutAmount: task.tasker_payout_amount ?? feeBreakdown.taskerPayoutAmount,
+      completionRequestedAt: task.completion_requested_at ? formatShortDate(task.completion_requested_at) : undefined,
+      completedAt: task.completed_at ? formatShortDate(task.completed_at) : undefined,
+      offers: counts.get(task.id)?.offers ?? 0,
+      questions: counts.get(task.id)?.questions ?? 0,
+      tags: tagsMap.get(task.id) ?? []
+    };
+  });
 }
 
 function buildReviews(reviews: ReviewRow[]) {
@@ -305,7 +335,12 @@ async function loadBaseRows() {
   ] = await Promise.all([
     supabase.from("profiles").select("id, full_name, email, bio, home_base, zip_code, travel_radius_miles, active_role"),
     supabase.from("tasker_service_areas").select("profile_id, zip_code"),
-    supabase.from("tasks").select("*").order("posted_at", { ascending: false }),
+    supabase
+      .from("tasks")
+      .select(
+        "id, posted_by, assigned_to, title, description, location, zip_code, budget, agreed_price, platform_fee_rate_basis_points, platform_fee_amount, tasker_payout_amount, timeline, status, completion_requested_at, completed_at, posted_at"
+      )
+      .order("posted_at", { ascending: false }),
     supabase.from("task_tags").select("task_id, label"),
     supabase.from("conversations").select("id, task_id, thread_type, tasker_id").order("created_at", { ascending: false }),
     supabase.from("conversation_participants").select("conversation_id, profile_id"),
@@ -428,7 +463,6 @@ async function ensureConversationParticipant(conversationId: string, profileId: 
 export async function createTaskInSupabase(input: {
   title: string;
   description: string;
-  categoryId: string;
   location: string;
   zipCode: string;
   budget: number;
@@ -445,7 +479,6 @@ export async function createTaskInSupabase(input: {
     .from("tasks")
     .insert({
       posted_by: authData.user.id,
-      category_id: input.categoryId.trim() || null,
       title: input.title,
       description: input.description,
       location: input.location,
@@ -472,6 +505,35 @@ export async function createTaskInSupabase(input: {
     conversationId: null,
     marketplace: await fetchMarketplaceFromSupabase()
   };
+}
+
+export async function deleteTaskInSupabase(taskId: string) {
+  ensureSupabase();
+
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError) throw authError;
+  if (!authData.user) throw new Error("Not authenticated");
+
+  const { data: task, error: taskError } = await supabase
+    .from("tasks")
+    .select("id, posted_by, status")
+    .eq("id", taskId)
+    .single();
+
+  if (taskError) throw taskError;
+
+  if (task.posted_by !== authData.user.id) {
+    throw new Error("Only the poster can remove this job.");
+  }
+
+  if (task.status !== "open") {
+    throw new Error("This job is already in motion. Message the tasker in Inbox instead of deleting it.");
+  }
+
+  const { error: deleteError } = await supabase.from("tasks").delete().eq("id", taskId);
+  if (deleteError) throw deleteError;
+
+  return fetchMarketplaceFromSupabase();
 }
 
 export async function openConversationInSupabase(taskId: string, threadType: ConversationType = "private") {
@@ -619,16 +681,127 @@ export async function acceptLatestOfferInSupabase(conversationId: string) {
 
   if (conversationError) throw conversationError;
 
+  const { data: task, error: taskError } = await supabase
+    .from("tasks")
+    .select("posted_by, status")
+    .eq("id", conversation.task_id)
+    .single();
+
+  if (taskError) throw taskError;
+
+  if (task.posted_by !== authData.user.id) {
+    throw new Error("Only the poster can accept an offer.");
+  }
+
+  if (task.status !== "open") {
+    throw new Error("This job is no longer open for new offers.");
+  }
+
+  const feeBreakdown = computeFeeBreakdown(latestOffer.offer_amount, 1000);
+
   const { error: updateError } = await supabase
     .from("tasks")
     .update({
-      status: "assigned",
+      status: "in_progress",
       assigned_to: latestOffer.sender_id,
-      agreed_price: latestOffer.offer_amount
+      agreed_price: latestOffer.offer_amount,
+      platform_fee_rate_basis_points: feeBreakdown.basisPoints,
+      platform_fee_amount: feeBreakdown.platformFeeAmount,
+      tasker_payout_amount: feeBreakdown.taskerPayoutAmount,
+      payment_status: "booked",
+      completion_requested_at: null,
+      completed_at: null
     })
     .eq("id", conversation.task_id);
 
   if (updateError) throw updateError;
+
+  const { error: messageError } = await supabase.from("messages").insert({
+    conversation_id: conversationId,
+    sender_id: null,
+    body: `Offer accepted for $${latestOffer.offer_amount}. Workzy keeps $${feeBreakdown.platformFeeAmount} and the tasker payout is $${feeBreakdown.taskerPayoutAmount} after release.`,
+    kind: "system",
+    offer_amount: latestOffer.offer_amount
+  });
+
+  if (messageError) throw messageError;
+
+  return fetchMarketplaceFromSupabase();
+}
+
+async function getTaskForTransition(taskId: string) {
+  ensureSupabase();
+
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError) throw authError;
+  if (!authData.user) throw new Error("Not authenticated");
+
+  const { data: task, error: taskError } = await supabase
+    .from("tasks")
+    .select("id, posted_by, assigned_to, status, agreed_price")
+    .eq("id", taskId)
+    .single();
+
+  if (taskError) throw taskError;
+
+  return {
+    viewerId: authData.user.id,
+    task
+  };
+}
+
+async function findPrivateConversationId(taskId: string, taskerId: string | null) {
+  if (!taskerId) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("conversations")
+    .select("id")
+    .eq("task_id", taskId)
+    .eq("thread_type", "private")
+    .eq("tasker_id", taskerId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data?.id ?? null;
+}
+
+export async function requestTaskCompletionInSupabase(taskId: string) {
+  ensureSupabase();
+
+  const { viewerId, task } = await getTaskForTransition(taskId);
+
+  if (task.assigned_to !== viewerId) {
+    throw new Error("Only the assigned tasker can request completion.");
+  }
+
+  if (task.status !== "in_progress") {
+    throw new Error("This job is not ready for a completion request yet.");
+  }
+
+  const requestedAt = new Date().toISOString();
+  const { error: updateError } = await supabase
+    .from("tasks")
+    .update({
+      status: "completion_requested",
+      completion_requested_at: requestedAt
+    })
+    .eq("id", taskId);
+
+  if (updateError) throw updateError;
+
+  const conversationId = await findPrivateConversationId(taskId, task.assigned_to);
+  if (conversationId) {
+    const { error: messageError } = await supabase.from("messages").insert({
+      conversation_id: conversationId,
+      sender_id: null,
+      body: "Completion requested. The poster can now confirm the job and close out the booking flow.",
+      kind: "system"
+    });
+
+    if (messageError) throw messageError;
+  }
 
   return fetchMarketplaceFromSupabase();
 }
@@ -636,8 +809,84 @@ export async function acceptLatestOfferInSupabase(conversationId: string) {
 export async function completeTaskInSupabase(taskId: string) {
   ensureSupabase();
 
-  const { error } = await supabase.from("tasks").update({ status: "completed" }).eq("id", taskId);
+  const { viewerId, task } = await getTaskForTransition(taskId);
+
+  if (task.posted_by !== viewerId) {
+    throw new Error("Only the poster can confirm completion.");
+  }
+
+  if (!["in_progress", "completion_requested"].includes(task.status)) {
+    throw new Error("This job is not ready to be completed.");
+  }
+
+  const completedAt = new Date().toISOString();
+  const { error } = await supabase
+    .from("tasks")
+    .update({
+      status: "completed",
+      payment_status: "completion_confirmed",
+      completed_at: completedAt
+    })
+    .eq("id", taskId);
   if (error) throw error;
+
+  const conversationId = await findPrivateConversationId(taskId, task.assigned_to);
+  if (conversationId) {
+    const payoutAmount = task.agreed_price ?? null;
+    const { error: messageError } = await supabase.from("messages").insert({
+      conversation_id: conversationId,
+      sender_id: null,
+      body: payoutAmount
+        ? `Job marked complete. $${payoutAmount} is now marked as completion confirmed.`
+        : "Job marked complete. The booking flow is now marked as completion confirmed.",
+      kind: "system",
+      offer_amount: payoutAmount
+    });
+
+    if (messageError) throw messageError;
+  }
+
+  return fetchMarketplaceFromSupabase();
+}
+
+export async function releaseFundsInSupabase(taskId: string) {
+  ensureSupabase();
+
+  const { viewerId, task } = await getTaskForTransition(taskId);
+
+  if (task.posted_by !== viewerId) {
+    throw new Error("Only the poster can release the funds for this job.");
+  }
+
+  if (task.status !== "completed") {
+    throw new Error("This job is not ready to be released yet.");
+  }
+
+  const { error } = await supabase
+    .from("tasks")
+    .update({
+      status: "released",
+      payment_status: "closed"
+    })
+    .eq("id", taskId);
+
+  if (error) throw error;
+
+  const conversationId = await findPrivateConversationId(taskId, task.assigned_to);
+  if (conversationId) {
+    const releasedAmount = task.agreed_price ?? null;
+    const { error: messageError } = await supabase.from("messages").insert({
+      conversation_id: conversationId,
+      sender_id: null,
+      body: releasedAmount
+        ? `Funds released for $${releasedAmount}. This job now moves to history.`
+        : "Funds released. This job now moves to history.",
+      kind: "system",
+      offer_amount: releasedAmount
+    });
+
+    if (messageError) throw messageError;
+  }
 
   return fetchMarketplaceFromSupabase();
 }

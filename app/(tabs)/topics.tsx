@@ -37,7 +37,6 @@ export default function PostTaskScreen() {
     const taskId = await createTask({
       title: title.trim(),
       description: description.trim(),
-      categoryId: "",
       location: location.trim(),
       zipCode: zipCode.trim(),
       budget: parsedBudget,

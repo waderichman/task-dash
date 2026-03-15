@@ -5,6 +5,22 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Screen } from "@/components/screen";
 import { useAppStore } from "@/store/use-app-store";
 
+function formatTaskStage(value: string) {
+  if (value === "open") {
+    return "Booking Needed";
+  }
+
+  if (["assigned", "in_progress", "completion_requested"].includes(value)) {
+    return "Booked";
+  }
+
+  if (value === "released") {
+    return "Released";
+  }
+
+  return "Completed";
+}
+
 export default function JobThreadScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ taskId?: string | string[] }>();
@@ -87,7 +103,7 @@ export default function JobThreadScreen() {
             <InlinePill icon="navigate-outline" text={task.zipCode} />
             <InlinePill icon="cash-outline" text={`$${task.agreedPrice ?? task.budget}`} />
             <InlinePill icon="time-outline" text={task.timeline} />
-            <InlinePill icon="layers-outline" text={task.status} />
+            <InlinePill icon="layers-outline" text={formatTaskStage(task.status)} />
           </View>
         ) : null}
       </View>
@@ -103,7 +119,7 @@ export default function JobThreadScreen() {
                 ? "System"
                 : isMine
                   ? currentAccount?.name
-                  : senderLookup.get(message.senderId) ?? "TaskDash member";
+                  : senderLookup.get(message.senderId) ?? "Workzy member";
 
               return (
                 <View
