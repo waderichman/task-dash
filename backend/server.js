@@ -32,6 +32,10 @@ const supabase = createClient(SUPABASE_URL || "", SUPABASE_SERVICE_ROLE_KEY || "
 
 const app = express();
 
+function getStripeAccountStatus(account) {
+  return account.details_submitted && account.payouts_enabled ? "active" : "pending";
+}
+
 app.use(cors());
 app.post("/webhooks/stripe", express.raw({ type: "application/json" }), async (req, res) => {
   if (!STRIPE_WEBHOOK_SECRET) {
@@ -59,7 +63,7 @@ app.post("/webhooks/stripe", express.raw({ type: "application/json" }), async (r
         await supabase
           .from("profiles")
           .update({
-            stripe_account_status: account.charges_enabled && account.payouts_enabled ? "active" : "pending"
+            stripe_account_status: getStripeAccountStatus(account)
           })
           .eq("id", profileId);
       }
@@ -174,6 +178,21 @@ app.post("/stripe/connect/account-link", async (req, res) => {
 
     if (!profile?.stripe_account_id) {
       return res.status(400).json({ error: "Tasker has no Stripe account yet" });
+    }
+
+    const account = await stripe.accounts.retrieve(profile.stripe_account_id);
+    const stripeAccountStatus = getStripeAccountStatus(account);
+
+    await supabase
+      .from("profiles")
+      .update({
+        stripe_account_status: stripeAccountStatus
+      })
+      .eq("id", profileId);
+
+    if (stripeAccountStatus === "active") {
+      const loginLink = await stripe.accounts.createLoginLink(profile.stripe_account_id);
+      return res.json({ url: loginLink.url });
     }
 
     const link = await stripe.accountLinks.create({
