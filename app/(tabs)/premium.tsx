@@ -238,6 +238,35 @@ export default function ProfileScreen() {
         <InfoRow icon="cash-outline" text="Pricing stays inside private chats so posters can compare offers cleanly before booking." />
         <InfoRow icon="shield-checkmark-outline" text="ZIP coverage controls which taskers can see and join local work." />
       </View>
+
+      <View className="mt-8 rounded-[28px] border border-[#e8e1d5] bg-white px-5 py-5">
+        <Text className="text-lg font-bold text-[#08101c]">Disclaimer</Text>
+        <Text className="mt-3 text-sm leading-6 text-[#5b6779]">
+          Workzy is a marketplace that helps posters and taskers connect. Taskers and posters use Workzy as
+          independent users and are not employees, agents, joint venturers, or representatives of Workzy. Workzy does
+          not perform the services offered by taskers and does not guarantee the quality, safety, legality, licensing,
+          insurance, identity, background, credentials, availability, conduct, or outcome of any job, communication,
+          or transaction arranged through the app.
+        </Text>
+        <Text className="mt-3 text-sm leading-6 text-[#5b6779]">
+          Users are responsible for their own decisions, screening, hiring, supervision, access to property, and
+          interactions with others on the platform. If there is an emergency, immediate safety threat, injury, theft,
+          assault, or suspected crime, contact local emergency services right away first, then report the issue to
+          Workzy.
+        </Text>
+        <Text className="mt-3 text-sm leading-6 text-[#5b6779]">
+          In-app information is general platform guidance only and is not legal, safety, insurance, tax, employment,
+          or professional advice. Use of Workzy is subject to Workzy&apos;s terms, policies, and applicable law.
+        </Text>
+      </View>
+
+      <View className="mt-8 rounded-[28px] border border-[#e8e1d5] bg-white px-5 py-5">
+        <Text className="text-lg font-bold text-[#08101c]">Contact us</Text>
+        <Text className="mt-3 text-sm leading-6 text-[#5b6779]">
+          Questions, safety concerns, takedown requests, or support issues can be sent to:
+        </Text>
+        <Text className="mt-3 text-base font-bold text-[#08101c]">tookey444@gmail.com</Text>
+      </View>
     </Screen>
   );
 }
