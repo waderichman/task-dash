@@ -7,6 +7,8 @@ export type RatingSummary = {
   count: number;
 };
 
+export type StripeAccountStatus = "not_started" | "pending" | "active";
+
 export type MarketplaceUser = {
   id: string;
   name: string;
@@ -45,8 +47,12 @@ export type Task = {
   platformFeeRate: number;
   platformFeeAmount: number;
   taskerPayoutAmount: number;
+  stripePaymentIntentId?: string;
+  stripeTransferId?: string;
+  bookingPaidAt?: string;
   completionRequestedAt?: string;
   completedAt?: string;
+  fundsReleasedAt?: string;
   offers: number;
   questions: number;
   tags: string[];
@@ -93,6 +99,8 @@ export type CurrentAccount = {
   serviceZipCodes: string[];
   travelRadiusMiles: number;
   bio: string;
+  stripeAccountId?: string;
+  stripeAccountStatus: StripeAccountStatus;
   posterStats: {
     tasksPosted: number;
     hireRate: string;

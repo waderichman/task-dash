@@ -72,7 +72,8 @@ app.post("/webhooks/stripe", express.raw({ type: "application/json" }), async (r
         await supabase
           .from("tasks")
           .update({
-            stripe_payment_intent_id: intent.id
+            stripe_payment_intent_id: intent.id,
+            booking_paid_at: new Date().toISOString()
           })
           .eq("id", taskId);
       }
@@ -90,11 +91,33 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "workzy-payments" });
 });
 
+app.get("/stripe/refresh", (_req, res) => {
+  res.status(200).send("Stripe onboarding refresh. Return to Workzy and open payout setup again if needed.");
+});
+
+app.get("/stripe/return", (_req, res) => {
+  res.status(200).send("Stripe onboarding complete. You can return to Workzy.");
+});
+
 app.post("/stripe/connect/account", async (req, res) => {
   try {
     const { profileId, email, name } = req.body;
     if (!profileId || !email) {
       return res.status(400).json({ error: "profileId and email are required" });
+    }
+
+    const { data: existingProfile, error: existingProfileError } = await supabase
+      .from("profiles")
+      .select("stripe_account_id")
+      .eq("id", profileId)
+      .single();
+
+    if (existingProfileError) {
+      throw existingProfileError;
+    }
+
+    if (existingProfile?.stripe_account_id) {
+      return res.json({ accountId: existingProfile.stripe_account_id });
     }
 
     const account = await stripe.accounts.create({

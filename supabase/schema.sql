@@ -49,6 +49,7 @@ create table if not exists public.tasks (
   payment_status text not null default 'booking_needed' check (payment_status in ('booking_needed', 'booked', 'completion_confirmed', 'closed')),
   stripe_payment_intent_id text unique,
   stripe_transfer_id text unique,
+  booking_paid_at timestamptz,
   completion_requested_at timestamptz,
   completed_at timestamptz,
   funds_released_at timestamptz,
@@ -110,6 +111,7 @@ alter table public.tasks add column if not exists platform_fee_amount integer no
 alter table public.tasks add column if not exists tasker_payout_amount integer not null default 0;
 alter table public.tasks add column if not exists stripe_payment_intent_id text;
 alter table public.tasks add column if not exists stripe_transfer_id text;
+alter table public.tasks add column if not exists booking_paid_at timestamptz;
 alter table public.tasks add column if not exists completion_requested_at timestamptz;
 alter table public.tasks add column if not exists completed_at timestamptz;
 alter table public.tasks add column if not exists funds_released_at timestamptz;

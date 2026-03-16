@@ -138,6 +138,8 @@ type SupabaseProfileRow = {
   home_base: string | null;
   zip_code: string;
   travel_radius_miles: number | null;
+  stripe_account_id: string | null;
+  stripe_account_status: "not_started" | "pending" | "active" | null;
   active_role: UserRole | null;
 };
 
@@ -189,6 +191,8 @@ function toStoredAccount(profile: SupabaseProfileRow, serviceZipCodes: string[])
     serviceZipCodes: normalizeZipCodes([profile.zip_code, ...serviceZipCodes]),
     travelRadiusMiles: profile.travel_radius_miles ?? 10,
     bio: profile.bio ?? "Workzy member",
+    stripeAccountId: profile.stripe_account_id ?? undefined,
+    stripeAccountStatus: profile.stripe_account_status ?? "not_started",
     posterStats: {
       tasksPosted: 0,
       hireRate: "0%",
@@ -224,7 +228,7 @@ async function resolveServiceAreaZipCodes(homeZip: string, extraZipCodes: string
 async function fetchSupabaseAccount(user: User) {
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("id, full_name, email, bio, home_base, zip_code, travel_radius_miles, active_role")
+    .select("id, full_name, email, bio, home_base, zip_code, travel_radius_miles, stripe_account_id, stripe_account_status, active_role")
     .eq("id", user.id)
     .single();
 

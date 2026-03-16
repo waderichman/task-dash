@@ -10,9 +10,11 @@ import {
   RatingRole,
   RatingSummary,
   Review,
+  StripeAccountStatus,
   Task,
   UserRole
 } from "@/lib/types";
+import { releaseTaskFunds } from "@/lib/payments";
 
 type ProfileRow = {
   id: string;
@@ -22,6 +24,8 @@ type ProfileRow = {
   home_base: string | null;
   zip_code: string;
   travel_radius_miles: number | null;
+  stripe_account_id: string | null;
+  stripe_account_status: StripeAccountStatus | null;
   active_role: UserRole | null;
 };
 
@@ -45,8 +49,12 @@ type TaskRow = {
   tasker_payout_amount: number | null;
   timeline: string;
   status: "open" | "assigned" | "in_progress" | "completion_requested" | "completed" | "released";
+  stripe_payment_intent_id: string | null;
+  stripe_transfer_id: string | null;
+  booking_paid_at: string | null;
   completion_requested_at: string | null;
   completed_at: string | null;
+  funds_released_at: string | null;
   posted_at: string;
 };
 
@@ -197,6 +205,8 @@ function buildCurrentAccount(
     serviceZipCodes: serviceAreaMap.get(currentProfile.id) ?? [currentProfile.zip_code],
     travelRadiusMiles: currentProfile.travel_radius_miles ?? 10,
     bio: currentProfile.bio ?? "Workzy member",
+    stripeAccountId: currentProfile.stripe_account_id ?? undefined,
+    stripeAccountStatus: currentProfile.stripe_account_status ?? "not_started",
     posterStats: {
       tasksPosted: postedTasks.length,
       hireRate,
@@ -294,8 +304,12 @@ function buildTasks(
       platformFeeRate: feeBreakdown.platformFeeRate,
       platformFeeAmount: task.platform_fee_amount ?? feeBreakdown.platformFeeAmount,
       taskerPayoutAmount: task.tasker_payout_amount ?? feeBreakdown.taskerPayoutAmount,
+      stripePaymentIntentId: task.stripe_payment_intent_id ?? undefined,
+      stripeTransferId: task.stripe_transfer_id ?? undefined,
+      bookingPaidAt: task.booking_paid_at ? formatShortDate(task.booking_paid_at) : undefined,
       completionRequestedAt: task.completion_requested_at ? formatShortDate(task.completion_requested_at) : undefined,
       completedAt: task.completed_at ? formatShortDate(task.completed_at) : undefined,
+      fundsReleasedAt: task.funds_released_at ? formatShortDate(task.funds_released_at) : undefined,
       offers: counts.get(task.id)?.offers ?? 0,
       questions: counts.get(task.id)?.questions ?? 0,
       tags: tagsMap.get(task.id) ?? []
@@ -333,12 +347,12 @@ async function loadBaseRows() {
     messagesResult,
     reviewsResult
   ] = await Promise.all([
-    supabase.from("profiles").select("id, full_name, email, bio, home_base, zip_code, travel_radius_miles, active_role"),
+    supabase.from("profiles").select("id, full_name, email, bio, home_base, zip_code, travel_radius_miles, stripe_account_id, stripe_account_status, active_role"),
     supabase.from("tasker_service_areas").select("profile_id, zip_code"),
     supabase
       .from("tasks")
       .select(
-        "id, posted_by, assigned_to, title, description, location, zip_code, budget, agreed_price, platform_fee_rate_basis_points, platform_fee_amount, tasker_payout_amount, timeline, status, completion_requested_at, completed_at, posted_at"
+        "id, posted_by, assigned_to, title, description, location, zip_code, budget, agreed_price, platform_fee_rate_basis_points, platform_fee_amount, tasker_payout_amount, timeline, status, stripe_payment_intent_id, stripe_transfer_id, booking_paid_at, completion_requested_at, completed_at, funds_released_at, posted_at"
       )
       .order("posted_at", { ascending: false }),
     supabase.from("task_tags").select("task_id, label"),
@@ -862,11 +876,14 @@ export async function releaseFundsInSupabase(taskId: string) {
     throw new Error("This job is not ready to be released yet.");
   }
 
+  await releaseTaskFunds(taskId);
+
   const { error } = await supabase
     .from("tasks")
     .update({
       status: "released",
-      payment_status: "closed"
+      payment_status: "closed",
+      funds_released_at: new Date().toISOString()
     })
     .eq("id", taskId);
 

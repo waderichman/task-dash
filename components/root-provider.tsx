@@ -1,4 +1,5 @@
 import { PropsWithChildren, useEffect } from "react";
+import { StripeProvider } from "@stripe/stripe-react-native";
 import { hasSupabaseEnv, supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/use-app-store";
 
@@ -26,5 +27,15 @@ export function RootProvider({ children }: PropsWithChildren) {
     };
   }, [hydrateAuthSession]);
 
-  return children;
+  const publishableKey = process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
+
+  if (!publishableKey) {
+    return <>{children}</>;
+  }
+
+  return (
+    <StripeProvider publishableKey={publishableKey}>
+      <>{children}</>
+    </StripeProvider>
+  );
 }

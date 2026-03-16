@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
-import { FlatList, Pressable, Text, TextInput, View } from "react-native";
+import { Alert, FlatList, Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useNavigation } from "@react-navigation/native";
+import { useStripe } from "@stripe/stripe-react-native";
 import { Screen } from "@/components/screen";
+import { createBookingPaymentIntent } from "@/lib/payments";
 import { useAppStore } from "@/store/use-app-store";
 
 function formatTaskStage(value: string) {
@@ -25,6 +27,7 @@ function formatTaskStage(value: string) {
 export function InboxScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const { initPaymentSheet, presentPaymentSheet } = useStripe();
   const currentAccount = useAppStore((state) => state.currentAccount);
   const conversations = useAppStore((state) => state.conversations);
   const tasks = useAppStore((state) => state.tasks);
@@ -44,6 +47,7 @@ export function InboxScreen() {
   const inboxNotice = useAppStore((state) => state.inboxNotice);
   const status = useAppStore((state) => state.status);
   const [draft, setDraft] = useState("");
+  const [isOpeningCheckout, setIsOpeningCheckout] = useState(false);
   const privateConversations = useMemo(
     () => conversations.filter((conversation) => (conversation.threadType ?? "private") === "private"),
     [conversations]
@@ -95,6 +99,7 @@ export function InboxScreen() {
   const canRequestCompletion =
     Boolean(selectedTask) &&
     selectedTask?.assignedTo === currentAccount?.id &&
+    Boolean(selectedTask?.bookingPaidAt) &&
     ["assigned", "in_progress"].includes(selectedTask?.status ?? "");
   const canConfirmCompletion =
     Boolean(selectedTask) &&
@@ -104,6 +109,11 @@ export function InboxScreen() {
     Boolean(selectedTask) &&
     selectedTask?.postedBy === currentAccount?.id &&
     selectedTask?.status === "completed";
+  const canPayToBook =
+    Boolean(selectedTask) &&
+    selectedTask?.postedBy === currentAccount?.id &&
+    ["in_progress", "completion_requested", "completed"].includes(selectedTask?.status ?? "") &&
+    !selectedTask?.bookingPaidAt;
   const canSendOffers = selectedTask?.status === "open";
 
   const threadRows = useMemo(
@@ -183,6 +193,41 @@ export function InboxScreen() {
       kind: "offer",
       offerAmount: amount
     });
+  };
+
+  const handleCheckout = async () => {
+    if (!selectedTask) {
+      return;
+    }
+
+    try {
+      setIsOpeningCheckout(true);
+      const paymentIntent = await createBookingPaymentIntent(selectedTask.id);
+      const initResult = await initPaymentSheet({
+        merchantDisplayName: "Workzy",
+        paymentIntentClientSecret: paymentIntent.clientSecret,
+        returnURL: "workzy://confirm"
+      });
+
+      if (initResult.error) {
+        throw new Error(initResult.error.message);
+      }
+
+      const paymentResult = await presentPaymentSheet();
+      if (paymentResult.error) {
+        throw new Error(paymentResult.error.message);
+      }
+
+      Alert.alert("Booking paid", "Payment was successful. The booking is now funded in Workzy.");
+      await refreshMarketplace();
+    } catch (paymentError) {
+      Alert.alert(
+        "Unable to complete payment",
+        paymentError instanceof Error ? paymentError.message : "Something went wrong while opening Stripe checkout."
+      );
+    } finally {
+      setIsOpeningCheckout(false);
+    }
   };
 
   return (
@@ -338,6 +383,11 @@ export function InboxScreen() {
                   {Math.round(selectedTask.platformFeeRate * 100)}%), and the tasker receives ${selectedTask.taskerPayoutAmount}
                   once funds are released.
                 </Text>
+                <Text className="mt-2 text-sm leading-6 text-[#d9e4d7]">
+                  {selectedTask.bookingPaidAt
+                    ? `Booking was paid on ${selectedTask.bookingPaidAt}.`
+                    : "Booking payment has not been completed yet."}
+                </Text>
               </View>
             ) : null}
           </View>
@@ -363,20 +413,26 @@ export function InboxScreen() {
               />
               <QuickAction
                 label={
-                  canRequestCompletion
-                    ? "Request completion"
-                    : canConfirmCompletion
-                      ? "Confirm completion"
-                      : canReleaseFunds
-                        ? "Release funds"
-                      : selectedTask?.status === "completed"
-                        ? "Completed"
-                        : selectedTask?.status === "released"
-                          ? "Released"
-                        : "Completion steps"
+                  canPayToBook
+                    ? isOpeningCheckout
+                      ? "Opening checkout..."
+                      : "Pay & book"
+                    : canRequestCompletion
+                      ? "Request completion"
+                      : canConfirmCompletion
+                        ? "Confirm completion"
+                        : canReleaseFunds
+                          ? "Release funds"
+                          : selectedTask?.status === "completed"
+                            ? "Completed"
+                            : selectedTask?.status === "released"
+                              ? "Released"
+                              : "Completion steps"
                 }
                 onPress={() => {
-                  if (selectedTask && canRequestCompletion) {
+                  if (canPayToBook) {
+                    void handleCheckout();
+                  } else if (selectedTask && canRequestCompletion) {
                     void requestTaskCompletion(selectedTask.id);
                   } else if (selectedTask && canConfirmCompletion) {
                     void completeTask(selectedTask.id);
@@ -384,7 +440,20 @@ export function InboxScreen() {
                     void releaseFunds(selectedTask.id);
                   }
                 }}
-                disabled={!canRequestCompletion && !canConfirmCompletion && !canReleaseFunds}
+                disabled={!canPayToBook && !canRequestCompletion && !canConfirmCompletion && !canReleaseFunds}
+              />
+            </View>
+            <View className="flex-row gap-3">
+              <QuickAction
+                label={
+                  canPayToBook
+                    ? "Payment secured before work starts"
+                    : selectedTask?.bookingPaidAt
+                      ? "Booking paid"
+                      : "Waiting on payment"
+                }
+                onPress={() => undefined}
+                disabled
               />
             </View>
           </View>

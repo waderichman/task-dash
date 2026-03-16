@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Alert, Linking, Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen } from "@/components/screen";
+import { createTaskerOnboardingLink } from "@/lib/payments";
 import { useAppStore } from "@/store/use-app-store";
 
 export default function ProfileScreen() {
@@ -14,7 +15,9 @@ export default function ProfileScreen() {
   const conversations = useAppStore((state) => state.conversations);
   const status = useAppStore((state) => state.status);
   const error = useAppStore((state) => state.error);
+  const refreshMarketplace = useAppStore((state) => state.refreshMarketplace);
   const [isEditing, setIsEditing] = useState(false);
+  const [isOpeningPayouts, setIsOpeningPayouts] = useState(false);
   const [homeBase, setHomeBase] = useState("");
   const [zipCode, setZipCode] = useState("");
   const [travelRadiusMiles, setTravelRadiusMiles] = useState("10");
@@ -56,6 +59,27 @@ export default function ProfileScreen() {
 
     if (saved) {
       setIsEditing(false);
+    }
+  };
+
+  const handlePayoutSetup = async () => {
+    if (!currentAccount) {
+      return;
+    }
+
+    try {
+      setIsOpeningPayouts(true);
+      const url = await createTaskerOnboardingLink(currentAccount.id, currentAccount.name);
+      await Linking.openURL(url);
+      Alert.alert("Payout setup", "Finish the Stripe onboarding flow in your browser, then come back to Workzy.");
+      await refreshMarketplace();
+    } catch (paymentError) {
+      Alert.alert(
+        "Unable to open payouts",
+        paymentError instanceof Error ? paymentError.message : "Something went wrong while opening Stripe onboarding."
+      );
+    } finally {
+      setIsOpeningPayouts(false);
     }
   };
 
@@ -150,6 +174,37 @@ export default function ProfileScreen() {
             </View>
           </View>
         ) : null}
+      </View>
+
+      <View className="mt-8 rounded-[28px] border border-[#e8e1d5] bg-white px-5 py-5">
+        <Text className="text-lg font-bold text-[#08101c]">Tasker payouts</Text>
+        <Text className="mt-2 text-sm leading-6 text-[#5b6779]">
+          Stripe handles tasker onboarding and bank payouts. Posters pay inside Workzy, Workzy keeps its 10% platform fee, and the remainder is released to the tasker after completion.
+        </Text>
+        <View className="mt-4 flex-row flex-wrap gap-3">
+          <Badge
+            icon="card-outline"
+            text={
+              currentAccount?.stripeAccountStatus === "active"
+                ? "Payouts active"
+                : currentAccount?.stripeAccountStatus === "pending"
+                  ? "Payout setup in progress"
+                  : "Payouts not set up"
+            }
+          />
+        </View>
+        <Pressable
+          onPress={() => void handlePayoutSetup()}
+          className="mt-5 rounded-full bg-[#08101c] px-4 py-4"
+        >
+          <Text className="text-center text-sm font-bold text-white">
+            {isOpeningPayouts
+              ? "Opening Stripe..."
+              : currentAccount?.stripeAccountStatus === "active"
+                ? "Manage payout setup"
+                : "Set up payouts"}
+          </Text>
+        </Pressable>
       </View>
 
       <View className="mt-8 rounded-[28px] border border-[#e8e1d5] bg-[#08101c] px-5 py-5">
