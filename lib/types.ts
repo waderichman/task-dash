@@ -1,5 +1,3 @@
-export type UserRole = "poster" | "tasker";
-
 export type RatingRole = "poster" | "tasker";
 
 export type RatingSummary = {

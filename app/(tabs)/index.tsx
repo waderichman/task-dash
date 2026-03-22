@@ -1,446 +1,257 @@
 import { useMemo } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
-import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { Task } from "@/lib/types";
 import { Screen } from "@/components/screen";
-import { CurrentAccount, MarketplaceUser, Task, UserRole } from "@/lib/types";
 import { useAppStore } from "@/store/use-app-store";
 
-function formatTaskStage(value: string) {
-  if (value === "open") {
-    return "Booking Needed";
-  }
-
-  if (["assigned", "in_progress", "completion_requested"].includes(value)) {
-    return "Booked";
-  }
-
-  if (value === "released") {
-    return "Released";
-  }
-
-  return "Completed";
+function formatStatus(task: Task) {
+  if (task.status === "open") return "Open";
+  if (task.status === "assigned") return "Accepted";
+  if (task.status === "in_progress") return "In progress";
+  if (task.status === "completion_requested") return "Awaiting approval";
+  if (task.status === "completed") return "Completed";
+  return "Released";
 }
 
-const roleCopy: Record<
-  UserRole,
-  { title: string; subtitle: string; primaryCta: string; secondaryCta: string }
-> = {
-  poster: {
-    title: "Post the job. Run the thread. Book the right person.",
-    subtitle:
-      "Each job gets one public thread for questions and private inbox chats with interested taskers.",
-    primaryCta: "Post a new job",
-    secondaryCta: "Open your inbox"
-  },
-  tasker: {
-    title: "Find nearby work and negotiate directly with posters.",
-    subtitle:
-      "See local jobs, read the public thread, then message the poster directly when you want to quote the work.",
-    primaryCta: "Browse jobs",
-    secondaryCta: "Open your inbox"
-  }
-};
-
-export default function DiscoverScreen() {
+export default function BrowseScreen() {
   const router = useRouter();
-  const activeRole = useAppStore((state) => state.activeRole);
-  const selectRole = useAppStore((state) => state.selectRole);
   const tasks = useAppStore((state) => state.tasks);
-  const conversations = useAppStore((state) => state.conversations);
   const currentAccount = useAppStore((state) => state.currentAccount);
   const users = useAppStore((state) => state.users);
+  const conversations = useAppStore((state) => state.conversations);
   const error = useAppStore((state) => state.error);
-  const refreshMarketplace = useAppStore((state) => state.refreshMarketplace);
   const status = useAppStore((state) => state.status);
+  const refreshMarketplace = useAppStore((state) => state.refreshMarketplace);
   const beginThreadOpen = useAppStore((state) => state.beginThreadOpen);
-  const deleteTask = useAppStore((state) => state.deleteTask);
   const openConversationForTask = useAppStore((state) => state.openConversationForTask);
 
-  const copy = roleCopy[activeRole];
-
-  const managedTasks = useMemo(
-    () => tasks.filter((task) => task.postedBy === currentAccount?.id),
+  const postedTasks = useMemo(
+    () => tasks.filter((task) => task.postedBy === currentAccount?.id && task.status !== "released"),
     [currentAccount?.id, tasks]
   );
-  const openManagedTasks = managedTasks.filter((task) => task.status !== "released");
-  const openNearbyTasks = tasks.filter((task) => task.status === "open");
-  const visibleTasks = activeRole === "poster" ? openManagedTasks : openNearbyTasks;
+  const doingTasks = useMemo(
+    () => tasks.filter((task) => task.assignedTo === currentAccount?.id && task.status !== "released"),
+    [currentAccount?.id, tasks]
+  );
+  const openTasks = useMemo(
+    () =>
+      tasks.filter(
+        (task) =>
+          task.status === "open" &&
+          task.postedBy !== currentAccount?.id &&
+          task.assignedTo !== currentAccount?.id
+      ),
+    [currentAccount?.id, tasks]
+  );
 
-  const handleOpenTask = (taskId: string) => {
+  const openChat = (taskId: string) => {
     beginThreadOpen(taskId, "private");
     router.push("/inbox");
     void openConversationForTask(taskId);
   };
 
-  const handleOpenPublicThread = (taskId: string) => {
-    router.push(`/job-thread/${taskId}` as never);
-  };
-
   return (
     <Screen>
-      <LinearGradient
-        colors={["#f4f1ea", "#dff6e6", "#f4e6d4"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        className="rounded-[32px] border border-[#e6ded0] px-5 pb-6 pt-6"
-      >
-        <Text className="text-xs font-semibold uppercase tracking-[2px] text-[#56705e]">
-          Workzy
+      <View className="rounded-[28px] bg-white px-5 py-5">
+        <Text className="text-[30px] font-black text-[#101828]">Workzy</Text>
+        <Text className="mt-2 text-sm leading-6 text-[#667085]">
+          Post a task, compare offers, and manage bookings in one place.
         </Text>
-        <Text className="mt-3 text-[34px] font-black leading-[40px] text-[#08101c]">
-          {copy.title}
-        </Text>
-        <Text className="mt-3 text-sm leading-6 text-[#4f5d70]">{copy.subtitle}</Text>
 
-        <View className="mt-6 flex-row gap-3">
-          <RoleCard
-            label="Poster"
-            icon="create-outline"
-            active={activeRole === "poster"}
-            description="Create jobs, answer the public thread, and manage private inbox chats."
-            onPress={() => selectRole("poster")}
-          />
-          <RoleCard
-            label="Tasker"
-            icon="flash-outline"
-            active={activeRole === "tasker"}
-            description="Read the job thread, then message the poster when you want to talk details."
-            onPress={() => selectRole("tasker")}
-          />
+        <View className="mt-5 flex-row gap-3">
+          <PrimaryButton label="Post a task" onPress={() => router.push("/topics")} />
+          <SecondaryButton label="Open inbox" onPress={() => router.push("/inbox")} />
         </View>
+      </View>
 
-        <View className="mt-6 flex-row gap-3">
-          <QuickActionButton
-            label={copy.primaryCta}
-            filled
-            onPress={() => router.push(activeRole === "poster" ? "/topics" : "/")}
-          />
-          <QuickActionButton label={copy.secondaryCta} onPress={() => router.push("/inbox")} />
-        </View>
-      </LinearGradient>
-
-      <View className="mt-8 flex-row gap-3">
-        <CountCard
-          label={activeRole === "poster" ? "Open jobs" : "Open jobs near you"}
-          value={String(visibleTasks.length)}
-        />
-        <CountCard
-          label={activeRole === "poster" ? "Active chats" : "Live threads"}
-          value={String(conversations.length)}
-        />
+      <View className="mt-6 flex-row gap-3">
+        <MetricCard label="Posted" value={String(postedTasks.length)} />
+        <MetricCard label="Doing" value={String(doingTasks.length)} />
+        <MetricCard label="Chats" value={String(conversations.length)} />
       </View>
 
       {error ? (
-        <View className="mt-6 rounded-[24px] border border-[#efd3d3] bg-[#fff4f4] px-5 py-5">
-          <Text className="text-base font-bold text-[#5f1d1d]">We could not sync the latest data.</Text>
-          <Text className="mt-2 text-sm leading-6 text-[#8b3b3b]">{error}</Text>
-          <Pressable
-            onPress={() => void refreshMarketplace()}
-            className="mt-4 rounded-full bg-[#08101c] px-4 py-3"
-          >
-            <Text className="text-center text-sm font-bold text-white">
-              {status === "loading" ? "Refreshing..." : "Retry"}
-            </Text>
+        <View className="mt-6 rounded-[20px] border border-[#f3d2d2] bg-[#fff5f5] px-4 py-4">
+          <Text className="text-sm font-semibold text-[#b42318]">{error}</Text>
+          <Pressable onPress={() => void refreshMarketplace()} className="mt-3 rounded-full bg-[#0f6fff] px-4 py-3">
+            <Text className="text-center text-sm font-bold text-white">{status === "loading" ? "Refreshing..." : "Retry"}</Text>
           </Pressable>
         </View>
       ) : null}
 
       <SectionHeader
-        title={activeRole === "poster" ? "Manage your open jobs" : "Nearby jobs"}
-        detail={activeRole === "poster" ? "Keep the thread and inbox moving" : "Read the thread, then message the poster"}
+        title="My tasks"
+        detail="Tasks you posted and still need to manage."
+        actionLabel="Post"
+        onActionPress={() => router.push("/topics")}
       />
-
       <FlatList
-        data={visibleTasks}
+        data={postedTasks}
         keyExtractor={(item) => item.id}
         scrollEnabled={false}
         ItemSeparatorComponent={() => <View className="h-4" />}
         renderItem={({ item }) => (
           <TaskCard
             task={item}
-            poster={
-              item.postedBy === currentAccount?.id
-                ? currentAccount
-                : users.find((user) => user.id === item.postedBy)
-            }
-            tasker={item.assignedTo ? users.find((user) => user.id === item.assignedTo) : undefined}
-            isPosterView={activeRole === "poster"}
-            onOpenThread={() => handleOpenTask(item.id)}
-            onOpenPublicThread={() => handleOpenPublicThread(item.id)}
-            onDeleteTask={() => void deleteTask(item.id)}
+            subtitle={`${item.location} • $${item.agreedPrice ?? item.budget}`}
+            context={`${item.offers} offers • ${item.questions} questions`}
+            primaryLabel="View offers"
+            onPrimaryPress={() => openChat(item.id)}
+            secondaryLabel="View details"
+            onSecondaryPress={() => router.push(`/job-thread/${item.id}` as never)}
           />
         )}
-        ListEmptyComponent={
-          <EmptyState
-            title={activeRole === "poster" ? "No open jobs yet" : "No nearby jobs right now"}
-            body={
-              activeRole === "poster"
-                ? "Post your first job and taskers in your ZIP coverage will see the thread."
-                : "Check back soon or switch ZIP coverage in your profile later."
-            }
-          />
-        }
+        ListEmptyComponent={<EmptyCard text="You have no active posted tasks right now." />}
       />
 
-      {activeRole === "poster" && managedTasks.length > 0 ? (
-        <>
-          <SectionHeader title="History" detail="Released jobs that are fully wrapped" />
-          <FlatList
-            data={managedTasks.filter((task) => task.status === "released")}
-            keyExtractor={(item) => `${item.id}-complete`}
-            scrollEnabled={false}
-            ItemSeparatorComponent={() => <View className="h-4" />}
-            renderItem={({ item }) => (
-              <TaskCard
-                task={item}
-                poster={currentAccount ?? undefined}
-                tasker={item.assignedTo ? users.find((user) => user.id === item.assignedTo) : undefined}
-                isPosterView
-                onOpenThread={() => handleOpenTask(item.id)}
-                onOpenPublicThread={() => handleOpenPublicThread(item.id)}
-                onDeleteTask={() => void deleteTask(item.id)}
-              />
-            )}
-            ListEmptyComponent={<EmptyState title="No completed jobs yet" body="Completed work will land here." />}
+      <SectionHeader
+        title="Tasks I'm working on"
+        detail="Accepted tasks you should keep moving."
+      />
+      <FlatList
+        data={doingTasks}
+        keyExtractor={(item) => `${item.id}-doing`}
+        scrollEnabled={false}
+        ItemSeparatorComponent={() => <View className="h-4" />}
+        renderItem={({ item }) => (
+          <TaskCard
+            task={item}
+            subtitle={`${item.location} • $${item.agreedPrice ?? item.budget}`}
+            context="Private chat keeps the booking moving"
+            primaryLabel="Open chat"
+            onPrimaryPress={() => openChat(item.id)}
+            secondaryLabel="View details"
+            onSecondaryPress={() => router.push(`/job-thread/${item.id}` as never)}
           />
-        </>
-      ) : null}
+        )}
+        ListEmptyComponent={<EmptyCard text="You have no assigned tasks right now." />}
+      />
+
+      <SectionHeader
+        title="Available tasks"
+        detail="Open local tasks you can ask about or quote."
+      />
+      <FlatList
+        data={openTasks}
+        keyExtractor={(item) => `${item.id}-browse`}
+        scrollEnabled={false}
+        ItemSeparatorComponent={() => <View className="h-4" />}
+        renderItem={({ item }) => {
+          const poster = users.find((user) => user.id === item.postedBy);
+          return (
+            <TaskCard
+              task={item}
+              subtitle={`${poster?.name ?? "Local customer"} • ${item.location} • $${item.budget}`}
+              context={item.tags.length > 0 ? item.tags.join(" • ") : "Open for offers"}
+              primaryLabel="Send offer"
+              onPrimaryPress={() => openChat(item.id)}
+              secondaryLabel="View details"
+              onSecondaryPress={() => router.push(`/job-thread/${item.id}` as never)}
+            />
+          );
+        }}
+        ListEmptyComponent={<EmptyCard text="No nearby tasks right now." />}
+      />
     </Screen>
   );
 }
 
-function SectionHeader({ title, detail }: { title: string; detail: string }) {
-  return (
-    <View className="mb-4 mt-8 gap-1">
-      <Text className="text-lg font-bold text-[#08101c]">{title}</Text>
-      <Text className="text-sm font-semibold text-[#56705e]">{detail}</Text>
-    </View>
-  );
-}
-
-function RoleCard({
-  label,
-  icon,
-  description,
-  active,
-  onPress
+function SectionHeader({
+  title,
+  detail,
+  actionLabel,
+  onActionPress
 }: {
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  description: string;
-  active: boolean;
-  onPress: () => void;
+  title: string;
+  detail: string;
+  actionLabel?: string;
+  onActionPress?: () => void;
 }) {
   return (
-    <Pressable
-      onPress={onPress}
-      className={`min-h-[152px] flex-1 rounded-[24px] border px-4 py-4 ${
-        active ? "border-[#08101c] bg-white" : "border-[#e3ddcf] bg-white/50"
-      }`}
-    >
-      <View className="h-10 w-10 items-center justify-center rounded-full bg-[#ecf3ea]">
-        <Ionicons name={icon} size={18} color="#08101c" />
+    <View className="mb-3 mt-8 flex-row items-end justify-between gap-3">
+      <View className="flex-1">
+        <Text className="text-[24px] font-black text-[#101828]">{title}</Text>
+        <Text className="mt-1 text-sm leading-6 text-[#667085]">{detail}</Text>
       </View>
-      <Text className="mt-4 text-base font-bold text-[#08101c]">{label}</Text>
-      <Text className="mt-2 text-sm leading-5 text-[#596579]">{description}</Text>
-    </Pressable>
-  );
-}
-
-function QuickActionButton({
-  label,
-  onPress,
-  filled = false
-}: {
-  label: string;
-  onPress: () => void;
-  filled?: boolean;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      className={`flex-1 rounded-full px-4 py-4 ${filled ? "bg-[#08101c]" : "bg-white/75"}`}
-    >
-      <Text className={`text-center text-sm font-bold ${filled ? "text-white" : "text-[#08101c]"}`}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-function CountCard({ label, value }: { label: string; value: string }) {
-  return (
-    <View className="flex-1 rounded-[24px] border border-[#e8e1d5] bg-white px-4 py-4">
-      <Text className="text-[10px] font-semibold uppercase tracking-[1.5px] text-[#6f7d8d]">
-        {label}
-      </Text>
-      <Text className="mt-2 text-2xl font-black text-[#08101c]">{value}</Text>
-    </View>
-  );
-}
-
-function EmptyState({ title, body }: { title: string; body: string }) {
-  return (
-    <View className="rounded-[24px] border border-dashed border-[#d8d0c3] bg-[#faf7f2] px-5 py-8">
-      <Text className="text-base font-bold text-[#08101c]">{title}</Text>
-      <Text className="mt-2 text-sm leading-6 text-[#5b6779]">{body}</Text>
+      {actionLabel && onActionPress ? (
+        <Pressable onPress={onActionPress} className="rounded-full bg-[#eef4ff] px-4 py-2.5">
+          <Text className="text-sm font-bold text-[#0f6fff]">{actionLabel}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
 function TaskCard({
   task,
-  poster,
-  tasker,
-  isPosterView,
-  onOpenThread,
-  onOpenPublicThread,
-  onDeleteTask
+  subtitle,
+  context,
+  primaryLabel,
+  onPrimaryPress,
+  secondaryLabel,
+  onSecondaryPress
 }: {
   task: Task;
-  poster?: CurrentAccount | MarketplaceUser;
-  tasker?: MarketplaceUser;
-  isPosterView: boolean;
-  onOpenThread: () => void;
-  onOpenPublicThread: () => void;
-  onDeleteTask: () => void;
+  subtitle: string;
+  context: string;
+  primaryLabel: string;
+  onPrimaryPress: () => void;
+  secondaryLabel: string;
+  onSecondaryPress: () => void;
 }) {
-  const posterRating =
-    poster && "posterStats" in poster ? poster.posterStats.rating : poster?.posterRating;
-
   return (
-    <View className="rounded-[28px] border border-[#e8e1d5] bg-white px-5 py-5">
-      <View className="flex-row items-start justify-between">
-        <View className="mr-4 flex-1">
-          <Text className="text-xs font-semibold uppercase tracking-[1.5px] text-[#6f7d8d]">
-            {isPosterView ? "Your job" : "Open job"}
-          </Text>
-          <Text className="mt-2 text-xl font-bold leading-7 text-[#08101c]">{task.title}</Text>
+    <View className="rounded-[24px] border border-[#e4e7ec] bg-white px-4 py-4">
+      <View className="flex-row items-start justify-between gap-3">
+        <View className="flex-1">
+          <Text className="text-lg font-black text-[#101828]">{task.title}</Text>
+          <Text className="mt-1 text-sm text-[#667085]">{subtitle}</Text>
         </View>
-        <View className="rounded-full bg-[#eff8f1] px-3 py-2">
-          <Text className="text-sm font-bold text-[#214a35]">${task.agreedPrice ?? task.budget}</Text>
+        <View className="rounded-full bg-[#f2f4f7] px-3 py-2">
+          <Text className="text-xs font-bold text-[#344054]">{formatStatus(task)}</Text>
         </View>
       </View>
 
-      <Text className="mt-3 text-sm leading-6 text-[#5b6779]">{task.description}</Text>
+      <Text className="mt-3 text-sm leading-6 text-[#475467]">{task.description}</Text>
+      <Text className="mt-3 text-sm font-medium text-[#667085]">{context}</Text>
 
-      <View className="mt-5 flex-row flex-wrap gap-2">
-        <Pill icon="location-outline" text={task.location} />
-        <Pill icon="navigate-outline" text={task.zipCode} />
-        <Pill icon="time-outline" text={task.timeline} />
-        <Pill icon="layers-outline" text={formatTaskStage(task.status)} />
-      </View>
-
-      <View className="mt-4 rounded-[22px] bg-[#faf7f2] px-4 py-4">
-        <Text className="text-xs font-semibold uppercase tracking-[1.5px] text-[#6f7d8d]">
-          {isPosterView ? "Inbox activity" : "Poster"}
-        </Text>
-        <Text className="mt-2 text-base font-bold text-[#08101c]">
-          {isPosterView ? `${task.offers} offers | ${task.questions} questions` : poster?.name ?? "Local poster"}
-        </Text>
-        <View className="mt-3 flex-row flex-wrap gap-3">
-          {isPosterView ? (
-            <MetaPill icon="chatbubble-ellipses-outline" text="Open inbox chats and compare offers" />
-          ) : (
-            <>
-              <MetaPill
-                icon="star-outline"
-                text={posterRating ? `${posterRating.average.toFixed(1)} stars` : "Trusted locally"}
-              />
-              <MetaPill icon="chatbubble-ellipses-outline" text={`${task.offers} offers | ${task.questions} questions`} />
-            </>
-          )}
-        </View>
-      </View>
-
-      {tasker ? (
-        <View className="mt-4 rounded-[22px] bg-[#eef7ff] px-4 py-4">
-          <Text className="text-xs font-semibold uppercase tracking-[1.5px] text-[#55708e]">
-            Assigned tasker
-          </Text>
-          <Text className="mt-2 text-base font-bold text-[#08101c]">{tasker.name}</Text>
-        </View>
-      ) : null}
-
-      {(task.status === "assigned" ||
-        task.status === "in_progress" ||
-        task.status === "completion_requested" ||
-        task.status === "completed") && (
-        <View className="mt-4 rounded-[22px] bg-[#f4fbf2] px-4 py-4">
-          <Text className="text-xs font-semibold uppercase tracking-[1.5px] text-[#56705e]">
-            Job flow
-          </Text>
-          <Text className="mt-2 text-sm leading-6 text-[#4f5d70]">
-            {task.status === "completion_requested"
-              ? "Completion was requested. The poster still needs to confirm the job."
-              : task.status === "completed"
-                ? "The work is completed. Once the poster releases the funds, this job moves into history."
-                : "This job is booked and underway."}
-          </Text>
-          {task.agreedPrice ? (
-            <Text className="mt-3 text-sm leading-6 text-[#4f5d70]">
-              ${task.agreedPrice} total. Workzy keeps ${task.platformFeeAmount}, and the tasker receives ${task.taskerPayoutAmount}
-              after release.
-            </Text>
-          ) : null}
-        </View>
-      )}
-
-      {task.tags.length > 0 ? (
-        <View className="mt-5 flex-row flex-wrap gap-2">
-          {task.tags.map((tag) => (
-            <View key={tag} className="rounded-full bg-[#f3efe8] px-3 py-2">
-              <Text className="text-xs font-semibold text-[#6f7d8d]">{tag}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-
-      <View className="mt-5">
-        <Text className="text-sm font-medium text-[#7d8898]">{task.postedAt}</Text>
-        <View className="mt-3 flex-row gap-3">
-          <Pressable onPress={onOpenPublicThread} className="flex-1 rounded-full bg-[#f3efe8] px-4 py-3">
-            <Text className="text-center text-sm font-bold text-[#08101c]">
-              {isPosterView ? "Open job thread" : "View job thread"}
-            </Text>
-          </Pressable>
-          <Pressable onPress={onOpenThread} className="flex-1 rounded-full bg-[#08101c] px-4 py-3">
-            <Text className="text-center text-sm font-bold text-white">
-              {task.status === "released" ? "Open history chat" : isPosterView ? "Open inbox chats" : "Message poster"}
-            </Text>
-          </Pressable>
-        </View>
-        {isPosterView && task.status === "open" ? (
-          <Pressable onPress={onDeleteTask} className="mt-3 rounded-full border border-[#ead5d5] bg-[#fff7f7] px-4 py-3">
-            <Text className="text-center text-sm font-bold text-[#8b3b3b]">Delete job</Text>
-          </Pressable>
-        ) : null}
-        {isPosterView && (task.status === "assigned" || task.status === "in_progress" || task.status === "completion_requested") ? (
-          <Text className="mt-3 text-sm leading-6 text-[#7d8898]">
-            This job is already underway. Use Inbox to coordinate with the tasker instead of deleting it.
-          </Text>
-        ) : null}
+      <View className="mt-4 flex-row gap-3">
+        <PrimaryButton label={primaryLabel} onPress={onPrimaryPress} />
+        <SecondaryButton label={secondaryLabel} onPress={onSecondaryPress} />
       </View>
     </View>
   );
 }
 
-function Pill({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: string }) {
+function MetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <View className="flex-row items-center rounded-full bg-[#f6f3ed] px-3 py-2">
-      <Ionicons name={icon} size={14} color="#6f7d8d" />
-      <Text className="ml-2 text-xs font-semibold capitalize text-[#5b6779]">{text}</Text>
+    <View className="flex-1 rounded-[20px] border border-[#e4e7ec] bg-white px-4 py-4">
+      <Text className="text-[11px] font-semibold uppercase tracking-[1px] text-[#667085]">{label}</Text>
+      <Text className="mt-2 text-2xl font-black text-[#101828]">{value}</Text>
     </View>
   );
 }
 
-function MetaPill({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: string }) {
+function PrimaryButton({ label, onPress }: { label: string; onPress: () => void }) {
   return (
-    <View className="flex-row shrink items-center rounded-full bg-white px-3 py-2">
-      <Ionicons name={icon} size={14} color="#6f7d8d" />
-      <Text className="ml-2 shrink text-xs font-semibold text-[#5b6779]">{text}</Text>
+    <Pressable onPress={onPress} className="flex-1 rounded-full bg-[#0f6fff] px-4 py-3.5">
+      <Text className="text-center text-sm font-bold text-white">{label}</Text>
+    </Pressable>
+  );
+}
+
+function SecondaryButton({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} className="flex-1 rounded-full border border-[#d0d5dd] bg-white px-4 py-3.5">
+      <Text className="text-center text-sm font-bold text-[#344054]">{label}</Text>
+    </Pressable>
+  );
+}
+
+function EmptyCard({ text }: { text: string }) {
+  return (
+    <View className="rounded-[22px] border border-[#e4e7ec] bg-white px-4 py-5">
+      <Text className="text-sm text-[#667085]">{text}</Text>
     </View>
   );
 }

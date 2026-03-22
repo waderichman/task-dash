@@ -9,6 +9,10 @@ type StripeAccountLinkResponse = {
   url: string;
 };
 
+type StripeAccountStatusResponse = {
+  status: "not_started" | "pending" | "active";
+};
+
 type PaymentIntentResponse = {
   paymentIntentId: string;
   clientSecret: string;
@@ -31,8 +35,12 @@ async function getCurrentUserContext() {
   return data.user;
 }
 
-export async function createTaskerOnboardingLink(profileId: string, name: string) {
+export async function createPayoutOnboardingLink(profileId: string, name: string) {
   const user = await getCurrentUserContext();
+  const refreshUrl =
+    process.env.EXPO_PUBLIC_STRIPE_CONNECT_REFRESH_URL?.trim() || "workzy://payouts?status=refresh";
+  const returnUrl =
+    process.env.EXPO_PUBLIC_STRIPE_CONNECT_RETURN_URL?.trim() || "workzy://payouts?status=done";
 
   await postJson<StripeAccountResponse>("/stripe/connect/account", {
     profileId,
@@ -41,10 +49,18 @@ export async function createTaskerOnboardingLink(profileId: string, name: string
   });
 
   const accountLink = await postJson<StripeAccountLinkResponse>("/stripe/connect/account-link", {
-    profileId
+    profileId,
+    refreshUrl,
+    returnUrl
   });
 
   return accountLink.url;
+}
+
+export async function refreshPayoutStatus(profileId: string) {
+  return postJson<StripeAccountStatusResponse>("/stripe/connect/status", {
+    profileId
+  });
 }
 
 export async function createBookingPaymentIntent(taskId: string) {

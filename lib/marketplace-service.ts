@@ -11,8 +11,7 @@ import {
   RatingSummary,
   Review,
   StripeAccountStatus,
-  Task,
-  UserRole
+  Task
 } from "@/lib/types";
 import { releaseTaskFunds } from "@/lib/payments";
 
@@ -26,7 +25,7 @@ type ProfileRow = {
   travel_radius_miles: number | null;
   stripe_account_id: string | null;
   stripe_account_status: StripeAccountStatus | null;
-  active_role: UserRole | null;
+  active_role: string | null;
 };
 
 type ServiceAreaRow = {
@@ -716,13 +715,14 @@ export async function acceptLatestOfferInSupabase(conversationId: string) {
   const { error: updateError } = await supabase
     .from("tasks")
     .update({
-      status: "in_progress",
+      status: "assigned",
       assigned_to: latestOffer.sender_id,
       agreed_price: latestOffer.offer_amount,
       platform_fee_rate_basis_points: feeBreakdown.basisPoints,
       platform_fee_amount: feeBreakdown.platformFeeAmount,
       tasker_payout_amount: feeBreakdown.taskerPayoutAmount,
-      payment_status: "booked",
+      payment_status: "booking_needed",
+      booking_paid_at: null,
       completion_requested_at: null,
       completed_at: null
     })
@@ -733,12 +733,56 @@ export async function acceptLatestOfferInSupabase(conversationId: string) {
   const { error: messageError } = await supabase.from("messages").insert({
     conversation_id: conversationId,
     sender_id: null,
-    body: `Offer accepted for $${latestOffer.offer_amount}. Workzy keeps $${feeBreakdown.platformFeeAmount} and the tasker payout is $${feeBreakdown.taskerPayoutAmount} after release.`,
+    body: `Offer accepted for $${latestOffer.offer_amount}. Payment is still needed before work begins. Workzy keeps $${feeBreakdown.platformFeeAmount} and the payout will be $${feeBreakdown.taskerPayoutAmount} after release.`,
     kind: "system",
     offer_amount: latestOffer.offer_amount
   });
 
   if (messageError) throw messageError;
+
+  return fetchMarketplaceFromSupabase();
+}
+
+export async function confirmBookingPaymentInSupabase(taskId: string) {
+  ensureSupabase();
+
+  const { viewerId, task } = await getTaskForTransition(taskId);
+
+  if (task.posted_by !== viewerId) {
+    throw new Error("Only the customer can confirm payment for this job.");
+  }
+
+  if (task.status !== "assigned") {
+    throw new Error("This job is not waiting on booking payment.");
+  }
+
+  const bookedAt = new Date().toISOString();
+  const { error } = await supabase
+    .from("tasks")
+    .update({
+      status: "in_progress",
+      payment_status: "booked",
+      booking_paid_at: bookedAt
+    })
+    .eq("id", taskId);
+
+  if (error) throw error;
+
+  const conversationId = await findPrivateConversationId(taskId, task.assigned_to);
+  if (conversationId) {
+    const amount = task.agreed_price ?? null;
+    const { error: messageError } = await supabase.from("messages").insert({
+      conversation_id: conversationId,
+      sender_id: null,
+      body: amount
+        ? `Payment secured for $${amount}. The job is now ready to start.`
+        : "Payment secured. The job is now ready to start.",
+      kind: "system",
+      offer_amount: amount
+    });
+
+    if (messageError) throw messageError;
+  }
 
   return fetchMarketplaceFromSupabase();
 }

@@ -21,22 +21,23 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarActiveTintColor: "#0a1220",
-        tabBarInactiveTintColor: "#7b8aa0",
+        tabBarActiveTintColor: "#0f6fff",
+        tabBarInactiveTintColor: "#7c8798",
         tabBarStyle: {
-          backgroundColor: "#f6f3ed",
-          borderTopColor: "#e7e1d6",
-          height: 74,
+          backgroundColor: "#ffffff",
+          borderTopColor: "#e4e8ee",
+          height: 76,
           paddingTop: 10,
-          paddingBottom: 10
+          paddingBottom: 12
         },
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: "700"
         },
-        tabBarActiveBackgroundColor: "#d8f6df",
+        tabBarActiveBackgroundColor: "#edf4ff",
         tabBarItemStyle: {
           marginHorizontal: 8,
+          marginVertical: 6,
           borderRadius: 18
         },
         tabBarIcon: ({ color, size }) => (
@@ -48,10 +49,10 @@ export default function TabsLayout() {
         )
       })}
     >
-      <Tabs.Screen name="index" options={{ title: "Discover" }} />
+      <Tabs.Screen name="index" options={{ title: "Browse" }} />
       <Tabs.Screen name="topics" options={{ title: "Post" }} />
       <Tabs.Screen name="alerts" options={{ title: "Inbox" }} />
-      <Tabs.Screen name="premium" options={{ title: "Profile" }} />
+      <Tabs.Screen name="premium" options={{ title: "Account" }} />
     </Tabs>
   );
 }

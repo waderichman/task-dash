@@ -1,4 +1,4 @@
-import { ScrollView, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
 import { Screen } from "@/components/screen";
@@ -29,46 +29,44 @@ export default function MarketplaceProfileScreen() {
 
   return (
     <Screen>
-      <ScrollView showsVerticalScrollIndicator={false}>
-        <View className="rounded-[32px] border border-[#e6ded0] bg-white px-5 pb-6 pt-6">
-          <View className="h-16 w-16 items-center justify-center rounded-full bg-[#d8f6df]">
-            <Text className="text-2xl font-black text-[#08101c]">{user.name.slice(0, 1)}</Text>
-          </View>
-          <Text className="mt-4 text-3xl font-black text-[#08101c]">{user.name}</Text>
-          <Text className="mt-2 text-sm leading-6 text-[#5b6779]">{user.tagline}</Text>
-
-          <View className="mt-4 flex-row flex-wrap gap-3">
-            <Badge icon="star-outline" text={formatRating(user.taskerRating, "tasker")} />
-            <Badge icon="receipt-outline" text={`${user.jobsCompleted} jobs completed`} />
-            <Badge icon="location-outline" text={`ZIP ${user.zipCode}`} />
-            <Badge icon="navigate-outline" text={`${user.serviceZipCodes.length} service ZIPs`} />
-          </View>
+      <View className="rounded-[32px] border border-[#e6ded0] bg-white px-5 pb-6 pt-6">
+        <View className="h-16 w-16 items-center justify-center rounded-full bg-[#d8f6df]">
+          <Text className="text-2xl font-black text-[#08101c]">{user.name.slice(0, 1)}</Text>
         </View>
+        <Text className="mt-4 text-3xl font-black text-[#08101c]">{user.name}</Text>
+        <Text className="mt-2 text-sm leading-6 text-[#5b6779]">{user.tagline}</Text>
 
-        <View className="mt-8 gap-4">
-          <SummaryCard
-            title="Tasker reputation"
-            primary={formatRating(user.taskerRating, "tasker")}
-            secondary={`${user.jobsCompleted} completed jobs`}
-          />
-          <SummaryCard
-            title="Poster reputation"
-            primary={formatRating(user.posterRating, "poster")}
-            secondary={`${user.tasksPosted} jobs posted`}
-          />
+        <View className="mt-4 flex-row flex-wrap gap-3">
+          <Badge icon="star-outline" text={formatRating(user.taskerRating, "tasker")} />
+          <Badge icon="receipt-outline" text={`${user.jobsCompleted} jobs completed`} />
+          <Badge icon="location-outline" text={`ZIP ${user.zipCode}`} />
+          <Badge icon="navigate-outline" text={`${user.serviceZipCodes.length} service ZIPs`} />
         </View>
+      </View>
 
-        <ReviewSection
-          title="Tasker reviews"
-          emptyText="No tasker reviews yet."
-          reviews={taskerReviews}
+      <View className="mt-8 gap-4">
+        <SummaryCard
+          title="Tasker reputation"
+          primary={formatRating(user.taskerRating, "tasker")}
+          secondary={`${user.jobsCompleted} completed jobs`}
         />
-        <ReviewSection
-          title="Poster reviews"
-          emptyText="No poster reviews yet."
-          reviews={posterReviews}
+        <SummaryCard
+          title="Poster reputation"
+          primary={formatRating(user.posterRating, "poster")}
+          secondary={`${user.tasksPosted} jobs posted`}
         />
-      </ScrollView>
+      </View>
+
+      <ReviewSection
+        title="Tasker reviews"
+        emptyText="No tasker reviews yet."
+        reviews={taskerReviews}
+      />
+      <ReviewSection
+        title="Poster reviews"
+        emptyText="No poster reviews yet."
+        reviews={posterReviews}
+      />
     </Screen>
   );
 }

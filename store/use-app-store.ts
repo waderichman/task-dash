@@ -5,6 +5,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import {
   acceptLatestOfferInSupabase,
   completeTaskInSupabase,
+  confirmBookingPaymentInSupabase,
   createTaskInSupabase,
   deleteTaskInSupabase,
   fetchMarketplace,
@@ -24,8 +25,7 @@ import {
   MessageKind,
   RatingRole,
   Review,
-  Task,
-  UserRole
+  Task
 } from "@/lib/types";
 
 type CreateTaskInput = {
@@ -48,14 +48,12 @@ type UpdateProfileInput = {
 type LoginInput = {
   email: string;
   password: string;
-  role: UserRole;
 };
 
 type SignUpInput = {
   name: string;
   email: string;
   password: string;
-  role: UserRole;
   homeBase: string;
   zipCode: string;
   travelRadiusMiles: number;
@@ -73,7 +71,6 @@ type StoredAccount = CurrentAccount & {
 };
 
 type AppState = {
-  activeRole: UserRole;
   hasBootstrapped: boolean;
   status: LoadStatus;
   error: string | null;
@@ -85,9 +82,6 @@ type AppState = {
   tasks: Task[];
   conversations: Conversation[];
   reviews: Review[];
-  allTasks: Task[];
-  allConversations: Conversation[];
-  allReviews: Review[];
   highlights: MarketplacePayload["highlights"] | null;
   selectedConversationId: string | null;
   inboxNotice: string | null;
@@ -98,14 +92,15 @@ type AppState = {
       }
     | null;
   pendingSignUp: PendingSignUp | null;
+  pendingConfirmationEmail: string | null;
   bootstrap: () => Promise<void>;
   refreshMarketplace: () => Promise<void>;
   hydrateAuthSession: () => Promise<void>;
   beginThreadOpen: (taskId: string, threadType: "public" | "private") => void;
-  selectRole: (role: UserRole) => void;
   selectConversation: (conversationId: string) => void;
   login: (input: LoginInput) => Promise<boolean>;
   signUp: (input: SignUpInput) => Promise<boolean>;
+  resendConfirmation: (email?: string) => Promise<boolean>;
   logout: () => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<boolean>;
   createTask: (input: CreateTaskInput) => Promise<string | null>;
@@ -118,6 +113,7 @@ type AppState = {
     options?: { kind?: MessageKind; offerAmount?: number }
   ) => Promise<void>;
   acceptLatestOffer: (conversationId: string) => Promise<void>;
+  confirmBookingPayment: (taskId: string) => Promise<void>;
   requestTaskCompletion: (taskId: string) => Promise<void>;
   completeTask: (taskId: string) => Promise<void>;
   releaseFunds: (taskId: string) => Promise<void>;
@@ -140,10 +136,7 @@ type SupabaseProfileRow = {
   travel_radius_miles: number | null;
   stripe_account_id: string | null;
   stripe_account_status: "not_started" | "pending" | "active" | null;
-  active_role: UserRole | null;
 };
-
-const defaultRole: UserRole = "poster";
 
 function normalizeZipCodes(values: string[]) {
   const unique = new Set(
@@ -222,13 +215,17 @@ async function resolveServiceAreaZipCodes(homeZip: string, extraZipCodes: string
     return normalizeZipCodes([homeZip, ...extraZipCodes]);
   }
 
-  return normalizeZipCodes([homeZip, ...extraZipCodes, ...((data ?? []) as { zip_code: string }[]).map((item) => String(item.zip_code))]);
+  return normalizeZipCodes([
+    homeZip,
+    ...extraZipCodes,
+    ...((data ?? []) as { zip_code: string }[]).map((item) => String(item.zip_code))
+  ]);
 }
 
 async function fetchSupabaseAccount(user: User) {
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
-    .select("id, full_name, email, bio, home_base, zip_code, travel_radius_miles, stripe_account_id, stripe_account_status, active_role")
+    .select("id, full_name, email, bio, home_base, zip_code, travel_radius_miles, stripe_account_id, stripe_account_status")
     .eq("id", user.id)
     .single();
 
@@ -245,15 +242,10 @@ async function fetchSupabaseAccount(user: User) {
     throw new Error(serviceAreasError.message);
   }
 
-  const profileRow = profile as SupabaseProfileRow;
-
-  return {
-    account: toStoredAccount(
-      profileRow,
-      (serviceAreas ?? []).map((item) => String(item.zip_code))
-    ),
-    role: (profileRow.active_role ?? defaultRole) as UserRole
-  };
+  return toStoredAccount(
+    profile as SupabaseProfileRow,
+    (serviceAreas ?? []).map((item) => String(item.zip_code))
+  );
 }
 
 async function ensureSupabaseProfile(user: User, fallback?: PendingSignUp | null) {
@@ -278,8 +270,7 @@ async function ensureSupabaseProfile(user: User, fallback?: PendingSignUp | null
       bio: fallback.bio.trim() || "New Workzy member",
       home_base: fallback.homeBase.trim() || `ZIP ${zipCode}`,
       zip_code: zipCode,
-      travel_radius_miles: fallback.travelRadiusMiles,
-      active_role: fallback.role
+      travel_radius_miles: fallback.travelRadiusMiles
     });
 
     if (profileError) {
@@ -315,62 +306,30 @@ async function ensureSupabaseProfile(user: User, fallback?: PendingSignUp | null
 
 function createInitialState() {
   return {
-    activeRole: defaultRole,
     hasBootstrapped: false,
     status: "idle" as LoadStatus,
     error: null,
     ...createEmptyAuthState(),
     accounts: [],
-    allTasks: [],
-    allConversations: [],
-    allReviews: [],
-    pendingThreadTarget: null,
-    pendingSignUp: null
+    pendingSignUp: null,
+    pendingConfirmationEmail: null
   };
 }
 
-function applyMarketplacePayload(
-  payload: MarketplacePayload,
-  activeRole: UserRole,
-  selectedConversationId: string | null
-) {
-  const visibleTasks =
-    activeRole === "poster"
-      ? payload.tasks.filter((task) => task.postedBy === payload.currentAccount.id || task.assignedTo === payload.currentAccount.id)
-      : payload.tasks.filter(
-          (task) =>
-            task.postedBy === payload.currentAccount.id ||
-            task.assignedTo === payload.currentAccount.id ||
-            payload.currentAccount.serviceZipCodes.includes(task.zipCode) ||
-            payload.currentAccount.zipCode === task.zipCode
-        );
-
-  const visibleTaskIds = new Set(visibleTasks.map((task) => task.id));
-  const visibleUsers =
-    activeRole === "poster"
-      ? payload.users.filter((user) => user.serviceZipCodes.includes(payload.currentAccount.zipCode))
-      : payload.users;
-  const visibleConversations = payload.conversations.filter((conversation) =>
-    visibleTaskIds.has(conversation.taskId)
-  );
-
+function applyMarketplacePayload(payload: MarketplacePayload, selectedConversationId: string | null) {
   return {
     currentAccountId: payload.currentAccount.id,
     currentAccount: payload.currentAccount,
-    users: visibleUsers,
-    tasks: visibleTasks,
-    conversations: visibleConversations,
+    users: payload.users,
+    tasks: payload.tasks,
+    conversations: payload.conversations,
     reviews: payload.reviews,
-    allTasks: payload.tasks,
-    allConversations: payload.conversations,
-    allReviews: payload.reviews,
     highlights: payload.highlights,
     isAuthenticated: true,
     selectedConversationId:
-      selectedConversationId &&
-      visibleConversations.some((item) => item.id === selectedConversationId)
+      selectedConversationId && payload.conversations.some((item) => item.id === selectedConversationId)
         ? selectedConversationId
-        : visibleConversations[0]?.id ?? null,
+        : payload.conversations[0]?.id ?? null,
     inboxNotice: null
   };
 }
@@ -425,15 +384,15 @@ export const useAppStore = create<AppState>()(
         }
 
         try {
-          const { account, role } = await ensureSupabaseProfile(sessionUser, get().pendingSignUp);
+          const account = await ensureSupabaseProfile(sessionUser, get().pendingSignUp);
           const accounts = upsertAccount(get().accounts, account);
           const payload = await fetchMarketplace();
 
           set({
             accounts,
-            activeRole: role,
-            ...applyMarketplacePayload(payload, role, get().selectedConversationId),
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
             pendingSignUp: null,
+            pendingConfirmationEmail: null,
             status: "success",
             error: null
           });
@@ -457,7 +416,7 @@ export const useAppStore = create<AppState>()(
         try {
           const payload = await fetchMarketplace();
           set({
-            ...applyMarketplacePayload(payload, get().activeRole, get().selectedConversationId),
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -469,37 +428,9 @@ export const useAppStore = create<AppState>()(
           });
         }
       },
-      selectRole: (role) => {
-        const state = get();
-        set({
-          activeRole: role,
-          error: null
-        });
-
-        if (state.currentAccountId) {
-          void (async () => {
-            await supabase.from("profiles").update({ active_role: role }).eq("id", state.currentAccountId);
-            try {
-              const payload = await fetchMarketplace();
-              set({
-                activeRole: role,
-                ...applyMarketplacePayload(payload, role, get().selectedConversationId),
-                status: "success",
-                error: null,
-                pendingThreadTarget: null
-              });
-            } catch (error) {
-              set({
-                status: "error",
-                error: error instanceof Error ? error.message : "Unable to refresh marketplace"
-              });
-            }
-          })();
-        }
-      },
       selectConversation: (conversationId) =>
         set({ selectedConversationId: conversationId, pendingThreadTarget: null, inboxNotice: null }),
-      login: async ({ email, password, role }) => {
+      login: async ({ email, password }) => {
         set({ status: "loading", error: null });
 
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -513,17 +444,15 @@ export const useAppStore = create<AppState>()(
         }
 
         try {
-          const { account } = await ensureSupabaseProfile(data.user, get().pendingSignUp);
+          const account = await ensureSupabaseProfile(data.user, get().pendingSignUp);
           const accounts = upsertAccount(get().accounts, account);
           const payload = await fetchMarketplace();
 
-          await supabase.from("profiles").update({ active_role: role }).eq("id", account.id);
-
           set({
             accounts,
-            activeRole: role,
-            ...applyMarketplacePayload(payload, role, get().selectedConversationId),
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
             pendingSignUp: null,
+            pendingConfirmationEmail: null,
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -564,11 +493,14 @@ export const useAppStore = create<AppState>()(
           travelRadiusMiles: safeTravelRadius,
           email: normalizedEmail
         };
+        const redirectTo =
+          process.env.EXPO_PUBLIC_AUTH_CONFIRM_REDIRECT_URL?.trim() || "workzy://confirm";
+
         const { data, error } = await supabase.auth.signUp({
           email: normalizedEmail,
           password: input.password,
           options: {
-            emailRedirectTo: "workzy://confirm",
+            emailRedirectTo: redirectTo,
             data: {
               full_name: input.name.trim()
             }
@@ -591,7 +523,8 @@ export const useAppStore = create<AppState>()(
           set({
             status: "success",
             error: "Account created. Confirm your email, then sign in.",
-            pendingSignUp
+            pendingSignUp,
+            pendingConfirmationEmail: normalizedEmail
           });
           return false;
         }
@@ -603,8 +536,7 @@ export const useAppStore = create<AppState>()(
           bio: input.bio.trim() || "New Workzy member",
           home_base: input.homeBase.trim() || `ZIP ${zipCode}`,
           zip_code: zipCode,
-          travel_radius_miles: safeTravelRadius,
-          active_role: input.role
+          travel_radius_miles: safeTravelRadius
         });
 
         if (profileError) {
@@ -644,15 +576,15 @@ export const useAppStore = create<AppState>()(
         }
 
         try {
-          const { account } = await ensureSupabaseProfile(authUser, pendingSignUp);
+          const account = await ensureSupabaseProfile(authUser, pendingSignUp);
           const accounts = upsertAccount(get().accounts, account);
           const payload = await fetchMarketplace();
 
           set({
             accounts,
-            activeRole: input.role,
-            ...applyMarketplacePayload(payload, input.role, get().selectedConversationId),
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
             pendingSignUp: null,
+            pendingConfirmationEmail: null,
             status: "success",
             error: null
           });
@@ -670,6 +602,40 @@ export const useAppStore = create<AppState>()(
           return false;
         }
       },
+      resendConfirmation: async (email) => {
+        const targetEmail = (email ?? get().pendingConfirmationEmail ?? "").trim().toLowerCase();
+
+        if (!targetEmail) {
+          set({ status: "error", error: "Enter your email first so we know where to resend it." });
+          return false;
+        }
+
+        set({ status: "loading", error: null });
+
+        const redirectTo =
+          process.env.EXPO_PUBLIC_AUTH_CONFIRM_REDIRECT_URL?.trim() || "workzy://confirm";
+
+        const { error } = await supabase.auth.resend({
+          type: "signup",
+          email: targetEmail,
+          options: {
+            emailRedirectTo: redirectTo
+          }
+        });
+
+        if (error) {
+          set({ status: "error", error: error.message });
+          return false;
+        }
+
+        set({
+          status: "success",
+          error: `Confirmation email resent to ${targetEmail}.`,
+          pendingConfirmationEmail: targetEmail
+        });
+
+        return true;
+      },
       logout: async () => {
         const { error } = await supabase.auth.signOut();
         if (error) {
@@ -678,10 +644,11 @@ export const useAppStore = create<AppState>()(
         }
 
         set({
-          activeRole: defaultRole,
           status: "success",
           error: null,
-          ...createEmptyAuthState()
+          ...createEmptyAuthState(),
+          pendingSignUp: null,
+          pendingConfirmationEmail: null
         });
       },
       updateProfile: async (input) => {
@@ -755,13 +722,13 @@ export const useAppStore = create<AppState>()(
         }
 
         try {
-          const { account } = await fetchSupabaseAccount(authData.user);
+          const account = await fetchSupabaseAccount(authData.user);
           const accounts = upsertAccount(get().accounts, account);
           const payload = await fetchMarketplace();
 
           set({
             accounts,
-            ...applyMarketplacePayload(payload, get().activeRole, get().selectedConversationId),
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -794,11 +761,7 @@ export const useAppStore = create<AppState>()(
         try {
           const result = await createTaskInSupabase(input);
           set({
-            ...applyMarketplacePayload(
-              result.marketplace,
-              get().activeRole,
-              result.conversationId ?? get().selectedConversationId
-            ),
+            ...applyMarketplacePayload(result.marketplace, result.conversationId ?? get().selectedConversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -816,7 +779,7 @@ export const useAppStore = create<AppState>()(
         try {
           const payload = await deleteTaskInSupabase(taskId);
           set({
-            ...applyMarketplacePayload(payload, get().activeRole, get().selectedConversationId),
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -833,7 +796,7 @@ export const useAppStore = create<AppState>()(
         try {
           const result = await openConversationInSupabase(taskId, "public");
           set({
-            ...applyMarketplacePayload(result.marketplace, get().activeRole, result.conversationId),
+            ...applyMarketplacePayload(result.marketplace, result.conversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -853,11 +816,7 @@ export const useAppStore = create<AppState>()(
         try {
           const result = await openConversationInSupabase(taskId, "private");
           set({
-            ...applyMarketplacePayload(
-              result.marketplace,
-              get().activeRole,
-              result.conversationId
-            ),
+            ...applyMarketplacePayload(result.marketplace, result.conversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -869,7 +828,7 @@ export const useAppStore = create<AppState>()(
             set({
               status: "success",
               error: null,
-              inboxNotice: message,
+              inboxNotice: "No one has started a private chat for this task yet.",
               pendingThreadTarget: null,
               selectedConversationId: null
             });
@@ -897,7 +856,7 @@ export const useAppStore = create<AppState>()(
             offerAmount: options?.offerAmount
           });
           set({
-            ...applyMarketplacePayload(payload, get().activeRole, conversationId),
+            ...applyMarketplacePayload(payload, conversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -913,7 +872,7 @@ export const useAppStore = create<AppState>()(
         try {
           const payload = await acceptLatestOfferInSupabase(conversationId);
           set({
-            ...applyMarketplacePayload(payload, get().activeRole, conversationId),
+            ...applyMarketplacePayload(payload, conversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -925,11 +884,27 @@ export const useAppStore = create<AppState>()(
           });
         }
       },
+      confirmBookingPayment: async (taskId) => {
+        try {
+          const payload = await confirmBookingPaymentInSupabase(taskId);
+          set({
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
+            status: "success",
+            error: null,
+            pendingThreadTarget: null
+          });
+        } catch (error) {
+          set({
+            status: "error",
+            error: error instanceof Error ? error.message : "Unable to confirm payment"
+          });
+        }
+      },
       requestTaskCompletion: async (taskId) => {
         try {
           const payload = await requestTaskCompletionInSupabase(taskId);
           set({
-            ...applyMarketplacePayload(payload, get().activeRole, get().selectedConversationId),
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -945,7 +920,7 @@ export const useAppStore = create<AppState>()(
         try {
           const payload = await completeTaskInSupabase(taskId);
           set({
-            ...applyMarketplacePayload(payload, get().activeRole, get().selectedConversationId),
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -961,7 +936,7 @@ export const useAppStore = create<AppState>()(
         try {
           const payload = await releaseFundsInSupabase(taskId);
           set({
-            ...applyMarketplacePayload(payload, get().activeRole, get().selectedConversationId),
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -983,7 +958,7 @@ export const useAppStore = create<AppState>()(
             text
           });
           set({
-            ...applyMarketplacePayload(payload, get().activeRole, get().selectedConversationId),
+            ...applyMarketplacePayload(payload, get().selectedConversationId),
             status: "success",
             error: null,
             pendingThreadTarget: null
@@ -998,24 +973,21 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "workzy-store",
-      version: 8,
+      version: 10,
       storage: createJSONStorage(() => AsyncStorage),
       migrate: (persistedState, version) => {
-        if (!persistedState || typeof persistedState !== "object" || version < 8) {
+        if (!persistedState || typeof persistedState !== "object" || version < 10) {
           return createInitialState();
         }
 
         return persistedState as AppState;
       },
       partialize: (state) => ({
-        activeRole: state.activeRole,
         currentAccountId: state.currentAccountId,
         accounts: state.accounts,
-        allTasks: state.allTasks,
-        allConversations: state.allConversations,
-        allReviews: state.allReviews,
         selectedConversationId: state.selectedConversationId,
-        pendingSignUp: state.pendingSignUp
+        pendingSignUp: state.pendingSignUp,
+        pendingConfirmationEmail: state.pendingConfirmationEmail
       }),
       merge: (persistedState, currentState) => ({
         ...currentState,

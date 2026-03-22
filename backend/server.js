@@ -77,7 +77,9 @@ app.post("/webhooks/stripe", express.raw({ type: "application/json" }), async (r
           .from("tasks")
           .update({
             stripe_payment_intent_id: intent.id,
-            booking_paid_at: new Date().toISOString()
+            booking_paid_at: new Date().toISOString(),
+            payment_status: "booked",
+            status: "in_progress"
           })
           .eq("id", taskId);
       }
@@ -161,7 +163,7 @@ app.post("/stripe/connect/account", async (req, res) => {
 
 app.post("/stripe/connect/account-link", async (req, res) => {
   try {
-    const { profileId } = req.body;
+    const { profileId, refreshUrl, returnUrl } = req.body;
     if (!profileId) {
       return res.status(400).json({ error: "profileId is required" });
     }
@@ -197,12 +199,56 @@ app.post("/stripe/connect/account-link", async (req, res) => {
 
     const link = await stripe.accountLinks.create({
       account: profile.stripe_account_id,
-      refresh_url: STRIPE_CONNECT_REFRESH_URL,
-      return_url: STRIPE_CONNECT_RETURN_URL,
+      refresh_url: refreshUrl || STRIPE_CONNECT_REFRESH_URL,
+      return_url: returnUrl || STRIPE_CONNECT_RETURN_URL,
       type: "account_onboarding"
     });
 
     return res.json({ url: link.url });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/stripe/connect/status", async (req, res) => {
+  try {
+    const { profileId } = req.body;
+    if (!profileId) {
+      return res.status(400).json({ error: "profileId is required" });
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("stripe_account_id")
+      .eq("id", profileId)
+      .single();
+
+    if (profileError) {
+      throw profileError;
+    }
+
+    if (!profile?.stripe_account_id) {
+      await supabase
+        .from("profiles")
+        .update({
+          stripe_account_status: "not_started"
+        })
+        .eq("id", profileId);
+
+      return res.json({ status: "not_started" });
+    }
+
+    const account = await stripe.accounts.retrieve(profile.stripe_account_id);
+    const stripeAccountStatus = getStripeAccountStatus(account);
+
+    await supabase
+      .from("profiles")
+      .update({
+        stripe_account_status: stripeAccountStatus
+      })
+      .eq("id", profileId);
+
+    return res.json({ status: stripeAccountStatus });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }

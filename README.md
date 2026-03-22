@@ -28,12 +28,17 @@ EXPO_PUBLIC_API_BASE_URL=http://YOUR_COMPUTER_LAN_IP:4000
 EXPO_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY=your_stripe_publishable_key
+EXPO_PUBLIC_AUTH_CONFIRM_REDIRECT_URL=workzy://confirm
+EXPO_PUBLIC_STRIPE_CONNECT_REFRESH_URL=workzy://payouts?status=refresh
+EXPO_PUBLIC_STRIPE_CONNECT_RETURN_URL=workzy://payouts?status=done
 ```
 
 ## Notes
 
 - The SQL schema lives in `supabase/schema.sql`.
 - Email confirmation redirects should include `workzy://confirm`.
+- Stripe Connect return and refresh URLs can point back into the app with `workzy://payouts?...`.
+- Supabase Auth email sender branding is not controlled by this app code. For production, configure custom SMTP in Supabase Auth so confirmations come from your Workzy domain instead of the default Supabase sender.
 
 ## Payments Backend
 
@@ -51,8 +56,8 @@ STRIPE_SECRET_KEY=your_rotated_server_only_secret
 STRIPE_WEBHOOK_SECRET=your_webhook_secret
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
-STRIPE_CONNECT_REFRESH_URL=https://example.com/stripe/refresh
-STRIPE_CONNECT_RETURN_URL=https://example.com/stripe/return
+STRIPE_CONNECT_REFRESH_URL=workzy://payouts?status=refresh
+STRIPE_CONNECT_RETURN_URL=workzy://payouts?status=done
 ```
 
 Available routes:
@@ -60,6 +65,7 @@ Available routes:
 - `GET /health`
 - `POST /stripe/connect/account`
 - `POST /stripe/connect/account-link`
+- `POST /stripe/connect/status`
 - `POST /stripe/payments/payment-intent`
 - `POST /stripe/payments/release`
 - `POST /webhooks/stripe`
